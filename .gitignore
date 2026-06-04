@@ -1,0 +1,6 @@
+# Markdown — ignore all, keep only README
+docs/
+*.md
+!README.md
+
+# folder

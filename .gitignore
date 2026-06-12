@@ -1,6 +1,22 @@
-# Markdown — ignore all, keep only README
+# Markdown — ignore all, keep only README and tracked runtime assets
 docs/
 *.md
 !README.md
+!prompts/*.md
 
-# folder
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment and secrets
+.env
+
+# Runtime data (learned conventions, caches)
+data/

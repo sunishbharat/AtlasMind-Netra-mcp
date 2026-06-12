@@ -1,6 +1,203 @@
 # AtlasMind-Netra-mcp
+
 AtlasMind-Netra-mcp is the AI agent and MCP server layer of the AtlasMind platform. It sits between any MCP-compatible client (Claude Desktop, Cursor, or a custom UI) and the `atlasMind-Lite` JQL execution backend, running a multi-turn clarification loop before dispatching any query to Jira.
 
-Jira queries written by an LLM routinely fail or return wrong results because natural language is ambiguous — "escalation" could be a label, a custom field, or a priority value; "today" could mean created, updated, or due today; "my team" has no JQL equivalent. This agent fixes that by detecting ambiguous terms, asking one targeted clarifying question using real field names from the live Jira instance, learning team conventions so the same question is never asked twice, and only calling `atlasMind-Lite` once the intent is fully resolved.
+Jira queries written by an LLM routinely fail or return wrong results because natural language is ambiguous - "escalation" could be a label, a custom field, or a priority value; "today" could mean created, updated, or due today; "my team" has no JQL equivalent. This agent fixes that by detecting ambiguous terms, asking one targeted clarifying question using real field names from the live Jira instance, learning team conventions so the same question is never asked twice, and only calling `atlasMind-Lite` once the intent is fully resolved.
 
-Three MCP tools are exposed publicly: `query_jira`, `get_report`, and `get_jira_context`. Everything else — the clarification loop, session store, intent classifier, and report synthesiser — is internal.
+Four MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_report`, and `get_jira_context`. Everything else - the clarification loop, session store, intent classifier, and conventions store - is internal. In Milestone 1 only `query_jira` is implemented; the other three return a typed not-implemented error naming their milestone.
+
+## Prerequisites
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) for dependency management
+- A [Groq API key](https://console.groq.com/keys) (default LLM backend for the clarifier)
+- Optional for end-to-end runs: the atlasMind backend running on `http://localhost:8000`
+
+## Setup
+
+```powershell
+# install all runtime and dev dependencies
+uv sync
+
+# configure environment
+copy .env.example .env
+# edit .env and set at least GROQ_API_KEY
+```
+
+Every setting is overridable via `NETRA_*` environment variables; see `.env.example` for the full list (backend URL, session TTL, clarification limits, transport).
+
+## How to test the MCP server
+
+### 1. Run the automated test suite (no network, no API keys needed)
+
+The unit and integration tests fake the LLM (PydanticAI `TestModel`), the backend HTTP calls (`httpx.MockTransport`), and the MCP transport (in-memory FastMCP client), so they run fully offline:
+
+```powershell
+uv run python -m pytest --cov=core --cov=memory --cov=models --cov=config
+```
+
+Expected: all tests pass with coverage well above the 85% project gate.
+
+Lint and type checks (both must stay clean):
+
+```powershell
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy .
+```
+
+### 2. Interactive testing with the MCP Inspector
+
+The fastest way to poke the live server is FastMCP's dev inspector (opens a browser UI where you can list tools and call them with arbitrary arguments; requires Node.js since the inspector itself is an npm package):
+
+```powershell
+uv run fastmcp dev server.py:create_server
+```
+
+Then in the inspector:
+
+1. Call `query_jira` with `query = "show escalations from today"` and `session_id = "test-1"`.
+2. Expect a response with `requires_user_input: true` and a `clarification_question` referencing label/field/priority options - this works even **without** the backend or a Jira instance.
+3. Call `query_jira` again with the same `query` and `session_id`, plus `clarification_answer = "we use the escalation label"`.
+4. With the atlasMind backend running you get JQL + issues back; without it you get a graceful `errors: ["backend unreachable after retries: ..."]` response, which still proves the clarification loop end-to-end.
+5. Repeat step 1 with a new `session_id` - no question this time: the convention was learned and persisted to `data/conventions.json`.
+
+The three stub tools (`generate_briefing`, `get_report`, `get_jira_context`) should return a not-implemented error naming their milestone.
+
+### 3. Testing from Claude Desktop (stdio)
+
+Add this to `claude_desktop_config.json` (Settings -> Developer -> Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "atlasmind-netra": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:\\Users\\sunis\\Sunish\\Development\\AtlasMind-Netra-mcp",
+        "run",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "GROQ_API_KEY": "gsk_..."
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop, then ask: *"Using the atlasmind-netra tools, show escalations from today."* Claude should relay the clarification question to you verbatim (the tool description forbids it from answering itself), call the tool again with your answer, and present the results.
+
+### 4. Testing over streamable-http (production transport)
+
+In this mode the server runs standalone as a web service and clients connect to it over HTTP, instead of spawning it as a child process (stdio). One server process can serve many users; this is the production transport from the design doc.
+
+#### Terminal 1 - start the server in HTTP mode
+
+```powershell
+$env:NETRA_SERVER__TRANSPORT = "streamable-http"
+uv run python server.py
+```
+
+(Or set `NETRA_SERVER__TRANSPORT=streamable-http` in `.env` instead. `GROQ_API_KEY` must be available in this terminal or in `.env`, because the clarifier LLM runs server-side.)
+
+`main()` in `server.py` reads the settings and starts uvicorn bound to `127.0.0.1:8765`. The `/mcp` path is FastMCP's default endpoint for the streamable-http protocol, so the complete URL clients need is:
+
+```
+http://127.0.0.1:8765/mcp
+```
+
+To change the bind address or port, set `NETRA_SERVER__HOST` / `NETRA_SERVER__PORT` before starting (e.g. host `0.0.0.0` to accept connections from other machines). Leave this terminal running; everything below happens in a second terminal.
+
+#### Terminal 2, Option A - MCP Inspector
+
+```powershell
+npx @modelcontextprotocol/inspector
+```
+
+In the browser UI that opens: select transport **Streamable HTTP**, enter `http://127.0.0.1:8765/mcp`, and click **Connect**. You get the same UI as the stdio dev mode - list the four tools and call `query_jira` with JSON arguments (see the test script in section 2).
+
+#### Terminal 2, Option B - Claude Code
+
+Register the running server once:
+
+```powershell
+claude mcp add --transport http atlasmind-netra http://127.0.0.1:8765/mcp
+```
+
+Then start a Claude Code session and ask, for example: *"Using the atlasmind-netra tools, show escalations from today."* Claude relays the clarification question, calls the tool again with your answer, and presents the results. Remove the registration later with `claude mcp remove atlasmind-netra`.
+
+#### Notes for this mode
+
+- **Sessions live in the server process.** The Phase 1 store is in-memory: a pending clarification survives across tool calls while the server runs, but a server restart clears it. Learned conventions survive restarts - they are persisted in `data/conventions.json`.
+- **No auth yet.** Per-session credential binding is Milestone 4; until then anyone who can reach the port can query, and Jira auth comes from the backend's profile. Keep the default loopback bind (`127.0.0.1`) unless you are on a trusted network.
+
+### 5. Showing results in the AtlasMind browser UI (show_in_ui)
+
+`query_jira` accepts an opt-in `show_in_ui: true` flag. After the query succeeds, Netra-mcp pushes `<generated JQL> /raw` (the flag is appended after the JQL, separated by a space, so the bridge reads it as a command) into the live AtlasMind chat window via the frontendUI bridge server's `POST /api/mcp/inject` endpoint (contract: `docs/frontendui_bridge_contract.md`). The browser runs it through its normal send flow and renders the table and chart on screen - charts are only ever drawn by the frontend (single-renderer principle), and exports stay one click away there.
+
+To test:
+
+1. Start the frontendUI bridge server (`uv run python main.py` in the frontendUI repo, port 8001) and open the chat UI in a browser tab.
+2. If the bridge has an `API_KEY` configured, set `NETRA_FRONTEND__API_KEY` in `.env`.
+3. Call the tool with the flag, e.g. in the inspector:
+   `query_jira` with `{"query": "open bugs by assignee as a bar chart", "session_id": "ui-1", "show_in_ui": true}`.
+4. Expect: the chart appears in the browser, and the tool response carries `ui_injected: true`.
+5. Degradation checks: close the browser tab and repeat - the query still succeeds, with `ui_injected: false` and an errors note ("No active UI session"); same when the bridge is not running at all.
+
+Notes: injection re-executes the JQL once via the browser (the `/raw` flag skips LLM generation, so only one extra Jira search); it is opt-in per call by contract and never on by default.
+
+### 6. End-to-end with the atlasMind backend
+
+1. Start the backend (`uv run python app.py --server --model groq` in the backend repo) on port 8000, with its Jira profile configured.
+2. Optionally point the clarifier at the backend's cached Jira metadata so questions use real field names:
+   `NETRA_CLARIFICATION__JIRA_FIELDS_PATH=../AtlasMind/data/<profile>/jira_fields.json`
+3. Run any of the flows above; `query_jira` responses now include the generated JQL, issues, `display_fields`, and `chart_spec` passed through from the backend (contract: `docs/atlasmind_lite_api_contract.md`).
+
+## Human-verifiable query reports
+
+Every dispatched `query_jira` call (successful or failed at the backend) also writes a markdown report to `data/reports/<timestamp>_<session>_<id>.md` and returns its location in `report_path`. The report contains the original query, the applied term interpretations (so a wrongly learned convention is caught in the output), the generated JQL, the issue table, the chart specification, and any warnings - everything a human needs to verify the answer. Clarification questions do not produce reports.
+
+- Disable with `NETRA_DELIVERY__ENABLED=false`; change the folder with `NETRA_DELIVERY__OUTPUT_DIR`.
+- Delivery is best-effort: a failed write never fails the query (a note appears in `errors`).
+- The markdown file channel is the first `BaseDeliveryChannel` implementation (`briefings/delivery.py`); Teams/Slack/email/Confluence channels plug in as subclasses with Milestone 3.
+
+## Logging and log viewing
+
+### Log file
+
+Every server run appends structured JSON lines to `data/logs/netra.log` (created automatically on first start). The file persists across restarts and can be opened in any text editor - each line is one JSON object with `timestamp`, `level`, `event`, and context fields.
+
+Key events to look for:
+
+| event | meaning |
+|---|---|
+| `report_writing` | delivery channel is about to write a report; `path` field shows the exact file location |
+| `report_written` | report file written successfully |
+| `report_write_failed` | write failed; `error` field has the reason |
+| `report_skipped` | delivery is disabled (`NETRA_DELIVERY__ENABLED=false`) |
+| `report_delivery_failed` | orchestrator caught a delivery error; query still succeeded |
+
+To disable the log file set `NETRA_LOG__LOG_FILE=` (empty string) in `.env`. To change the path set `NETRA_LOG__LOG_FILE=data/logs/custom.log`.
+
+### Real-time log streaming
+
+To watch logs live while a test is running, open a second PowerShell window and run:
+
+```powershell
+Get-Content -Wait -Tail 20 "data\logs\netra.log"
+```
+
+New lines appear as they are written - equivalent to `tail -f` on Linux. Press `Ctrl+C` to stop.
+
+### Log format
+
+Console output is human-readable in dev mode and JSON when `NETRA_LOG__JSON_LOGS=true`. The log file is always JSON regardless of that setting, so it remains machine-readable even during local development. stdlib logs from httpx, asyncio, and other libraries are routed through the same pipeline and appear in both outputs.
+
+## Troubleshooting
+
+- **`invalid peer certificate: UnknownIssuer` from uv**: an antivirus or corporate proxy is intercepting HTTPS. Export its root CA, append it to a copy of the certifi bundle, and set `SSL_CERT_FILE` to the combined file before running uv.
+- **Clarifier errors about the model**: check `GROQ_API_KEY` is set and `NETRA_LLM__MODEL` names an available model. The server still answers queries (degraded, with a warning in `errors`) when the LLM is unreachable.
+- **Learned a wrong convention**: delete the offending entry from `data/conventions.json` (or the whole file); it is re-learned on the next clarification.

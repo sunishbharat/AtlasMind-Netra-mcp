@@ -1,0 +1,83 @@
+{
+  "escalation": {
+    "ambiguity": "Could be a label, a custom field, or a priority value; each is different JQL",
+    "questions": [
+      "Does your team use label=escalation, a custom Escalation flag field, or priority=Critical/Blocker to mark escalations?"
+    ],
+    "jql_patterns": {
+      "label": "labels = escalation",
+      "field": "cf[10042] = true",
+      "priority": "priority in (Critical, Blocker)"
+    }
+  },
+  "today": {
+    "ambiguity": "Could mean created, updated, or due today",
+    "questions": [
+      "By 'today', do you mean issues created today, updated today, or due today?"
+    ],
+    "jql_patterns": {
+      "created": "created >= startOfDay()",
+      "updated": "updated >= startOfDay()",
+      "due": "due >= startOfDay() AND due <= endOfDay()"
+    }
+  },
+  "my team": {
+    "ambiguity": "No JQL equivalent; needs a project key or an explicit assignee list",
+    "questions": [
+      "There is no 'team' in JQL - which project key (or list of assignees) does your team map to?"
+    ],
+    "jql_patterns": {}
+  },
+  "unresolved": {
+    "ambiguity": "resolution = Unresolved is not the same as status != Done",
+    "questions": [
+      "Does your team treat 'unresolved' as resolution = Unresolved, or as status not in (Done, Closed)?"
+    ],
+    "jql_patterns": {
+      "resolution": "resolution = Unresolved",
+      "status": "status not in (Done, Closed)"
+    }
+  },
+  "blocked": {
+    "ambiguity": "Could be a status, a flag, a label, or a 'is blocked by' link",
+    "questions": [
+      "Does your team mark blocked work with a Blocked status, the Flagged field, a label, or 'is blocked by' issue links?"
+    ],
+    "jql_patterns": {
+      "status": "status = Blocked",
+      "flag": "flagged is not EMPTY",
+      "label": "labels = blocked",
+      "link": "issueLinkType = 'is blocked by'"
+    }
+  },
+  "open": {
+    "ambiguity": "Could be the Open status specifically, or any not-done status",
+    "questions": [
+      "By 'open', do you mean status = Open specifically, or anything not yet done (status not in Done/Closed/Resolved)?"
+    ],
+    "jql_patterns": {
+      "status_open": "status = Open",
+      "not_done": "status not in (Done, Closed, Resolved)"
+    }
+  },
+  "recent": {
+    "ambiguity": "Unspecified time window; could be created or updated, and the range is unclear",
+    "questions": [
+      "How recent is 'recent' for your team - created in the last 7 days, updated in the last 7 days, or another window?"
+    ],
+    "jql_patterns": {
+      "created_7d": "created >= -7d",
+      "updated_7d": "updated >= -7d"
+    }
+  },
+  "overdue": {
+    "ambiguity": "Past due date, or past a sprint/fixVersion milestone",
+    "questions": [
+      "Is 'overdue' for your team an issue past its due date, or one slipping past its fixVersion/sprint?"
+    ],
+    "jql_patterns": {
+      "due": "due < now() AND resolution = Unresolved",
+      "fix_version": "fixVersion in unreleasedVersions() AND due < now()"
+    }
+  }
+}

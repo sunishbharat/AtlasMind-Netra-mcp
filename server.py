@@ -156,6 +156,12 @@ def create_server(
     ) -> QueryResponse:
         """Natural language -> clarification loop -> JQL -> result + chart_spec.
 
+        This tool returns issue metadata only: key, summary, status, priority,
+        assignee, created, updated, due date, and reporter. Comment text, issue
+        links, and changelog are NOT included in this response. Do NOT synthesize,
+        infer, or speculate about comment content, blocker reasons, or risk details
+        beyond the fields present in the returned issue objects.
+
         IMPORTANT: If the response contains `requires_user_input: true`, present
         `clarification_question` to the user VERBATIM and call this tool again with
         their answer as `clarification_answer`. Do NOT answer the clarification
@@ -227,6 +233,11 @@ def _resolve_relative_paths(settings: Settings) -> None:
         p: Path = getattr(clr, attr)
         if not p.is_absolute():
             setattr(clr, attr, root / p)
+    ana = settings.analysis
+    for attr in ("prompt_path", "ranking_rule_path"):
+        p = getattr(ana, attr)
+        if not p.is_absolute():
+            setattr(ana, attr, root / p)
 
 
 def main() -> None:

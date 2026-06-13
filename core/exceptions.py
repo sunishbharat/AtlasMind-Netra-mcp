@@ -24,3 +24,7 @@ class ClarificationError(NetraError):
 
 class StateTransitionError(NetraError):
     """An illegal clarification state machine transition was attempted (programming error)."""
+
+
+class AnalysisError(NetraError):
+    """IssueAnalyser LLM call failed or produced unusable output after retries."""

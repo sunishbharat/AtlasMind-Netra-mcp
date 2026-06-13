@@ -127,6 +127,14 @@ Register the running server once:
 claude mcp add --transport http atlasmind-netra http://127.0.0.1:8765/mcp
 ```
 
+This command tells Claude Code to remember this server:
+- `claude mcp add` - register a new MCP server with Claude Code
+- `--transport http` - connect over HTTP (the server is a separate process, not a subprocess spawned by Claude)
+- `atlasmind-netra` - the name Claude Code will use to identify this server
+- `http://127.0.0.1:8765/mcp` - the address where the server is listening (loopback, port 8765, `/mcp` path)
+
+You only need to run this once; Claude Code remembers the registration across sessions.
+
 Then start a Claude Code session and ask, for example: *"Using the atlasmind-netra tools, show escalations from today."* Claude relays the clarification question, calls the tool again with your answer, and presents the results. Remove the registration later with `claude mcp remove atlasmind-netra`.
 
 #### Notes for this mode

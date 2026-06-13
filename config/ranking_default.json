@@ -1,0 +1,10 @@
+{
+  "weights": {
+    "priority": { "Blocker": 40, "Critical": 30, "High": 15, "default": 0 },
+    "days_blocked": { "per_day": 2, "cap": 30 },
+    "dependent_issues": { "per_issue": 5, "cap": 25 },
+    "milestone_proximity": { "due_within_7d": 20, "due_within_14d": 10 },
+    "flagged": 10
+  },
+  "top_n": 5
+}

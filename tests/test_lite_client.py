@@ -10,6 +10,49 @@ from config.settings import LiteSettings
 from core.atlasmind_lite_client import AtlasMindLiteClient
 from core.exceptions import LiteBackendError
 
+OK_ISSUE_DETAILS_PAYLOAD = {
+    "issues": [
+        {
+            "key": "CAR-101",
+            "summary": "Engine stall on cold start",
+            "priority": "Critical",
+            "assignee": "jdoe",
+            "due_date": "2026-07-15",
+            "fix_versions": ["v2.3"],
+            "flagged": True,
+            "comments": [
+                {
+                    "id": "10042",
+                    "author": "jdoe",
+                    "body": "Still waiting on vendor response.",
+                    "created": "2026-06-10T08:30:00.000+0000",
+                    "updated": "2026-06-10T08:30:00.000+0000",
+                }
+            ],
+            "links": [
+                {
+                    "type": "blocks",
+                    "direction": "outward",
+                    "linked_issue_key": "CAR-205",
+                    "linked_issue_summary": "Engine sign-off",
+                }
+            ],
+            "changelog": [
+                {
+                    "field": "status",
+                    "from_value": "In Progress",
+                    "to_value": "Blocked",
+                    "author": "jdoe",
+                    "timestamp": "2026-05-25T10:00:00.000+0000",
+                }
+            ],
+            "extra_future_field": "must be tolerated",
+        }
+    ],
+    "not_found": [],
+    "error": None,
+}
+
 OK_PAYLOAD = {
     "type": "jql",
     "profile": "work",
@@ -135,3 +178,126 @@ async def test_health_true_and_false() -> None:
         raise httpx.ConnectError("down")
 
     assert not await make_client(down).health()
+
+
+# ---------------------------------------------------------------------------
+# POST /issue_details tests (Milestone 2)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_issue_details_success_parses_contract_payload() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=OK_ISSUE_DETAILS_PAYLOAD)
+
+    result = await make_client(handler).get_issue_details(["CAR-101"])
+
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.key == "CAR-101"
+    assert issue.priority == "Critical"
+    assert issue.flagged is True
+    assert len(issue.comments) == 1
+    assert issue.comments[0].id == "10042"
+    assert len(issue.links) == 1
+    assert issue.links[0].linked_issue_key == "CAR-205"
+    assert len(issue.changelog) == 1
+    assert issue.changelog[0].to_value == "Blocked"
+    assert result.not_found == []
+
+    body = json.loads(seen[0].content)
+    assert body["issue_keys"] == ["CAR-101"]
+    assert body["request_id"]
+    assert body["comments_limit"] == 20  # default applied
+    assert seen[0].url.path == "/issue_details"
+
+
+async def test_get_issue_details_not_found_passthrough() -> None:
+    payload = {"issues": [], "not_found": ["CAR-999"], "error": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    result = await make_client(handler).get_issue_details(["CAR-999"])
+    assert result.not_found == ["CAR-999"]
+    assert result.issues == []
+
+
+async def test_get_issue_details_in_band_error_raises() -> None:
+    payload = {"issues": [], "not_found": [], "error": "Error: Jira connection failed"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(LiteBackendError, match="Jira connection failed"):
+        await make_client(handler).get_issue_details(["CAR-101"])
+
+
+async def test_get_issue_details_503_retried_then_succeeds() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(503, json={"detail": "model not initialised"})
+        return httpx.Response(200, json=OK_ISSUE_DETAILS_PAYLOAD)
+
+    result = await make_client(handler).get_issue_details(["CAR-101"])
+    assert len(result.issues) == 1
+    assert calls["n"] == 2
+
+
+async def test_get_issue_details_transport_error_raises_after_retries() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(LiteBackendError, match="unreachable after retries"):
+        await make_client(handler, max_retries=2).get_issue_details(["CAR-101"])
+    assert calls["n"] == 2
+
+
+async def test_get_issue_details_422_not_retried() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(422, json={"detail": "bad body"})
+
+    with pytest.raises(LiteBackendError, match="HTTP 422"):
+        await make_client(handler).get_issue_details(["CAR-101"])
+    assert calls["n"] == 1
+
+
+async def test_get_issue_details_batches_large_key_list() -> None:
+    """Keys > 50 are split into 50-key batches; results are merged."""
+    batch_requests: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        batch_requests.append(body["issue_keys"])
+        return httpx.Response(
+            200, json={"issues": [], "not_found": body["issue_keys"], "error": None}
+        )
+
+    keys = [f"CAR-{i}" for i in range(55)]
+    result = await make_client(handler).get_issue_details(keys)
+
+    assert len(batch_requests) == 2
+    assert len(batch_requests[0]) + len(batch_requests[1]) == 55
+    assert max(len(b) for b in batch_requests) == 50
+    assert len(result.not_found) == 55
+
+
+async def test_get_issue_details_batch_error_propagates() -> None:
+    """If any batch returns an HTTP error, LiteBackendError is raised."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "bad body"})
+
+    with pytest.raises(LiteBackendError, match="HTTP 422"):
+        await make_client(handler).get_issue_details([f"CAR-{i}" for i in range(55)])

@@ -60,6 +60,13 @@ class LiteSettings(BaseModel):
         description="Default max issues requested per query when the caller passes no limit. "
         "The backend additionally enforces its own MAX_JIRA_RESULTS cap.",
     )
+    issue_details_path: str = Field(
+        default="/issue_details", description="Issue details endpoint path (Milestone 2)."
+    )
+    comments_limit_default: int = Field(
+        default=20,
+        description="Default max comments per issue for /issue_details requests.",
+    )
 
 
 class FrontendSettings(BaseModel):
@@ -117,6 +124,28 @@ class ClarificationSettings(BaseModel):
     )
     max_fields_in_prompt: int = Field(
         default=30, description="Cap on Jira field entries injected into the clarifier prompt."
+    )
+
+
+class AnalysisSettings(BaseModel):
+    """IssueAnalyser and RankingEngine configuration (Milestone 2)."""
+
+    prompt_path: Path = Field(
+        default=Path("prompts/issue_analysis_prompt.md"),
+        description="System prompt for the issue analyser LLM.",
+    )
+    max_concurrency: int = Field(
+        default=5,
+        description="Max concurrent per-issue LLM calls in IssueAnalyser.",
+    )
+    blocked_statuses: list[str] = Field(
+        default_factory=lambda: ["Blocked", "Stalled", "On Hold", "Waiting"],
+        description="Status names that count as blocked for days_blocked computation "
+        "(case-insensitive). Override to match your Jira workflow.",
+    )
+    ranking_rule_path: Path = Field(
+        default=Path("config/ranking_default.json"),
+        description="Path to the ranking weights JSON file.",
     )
 
 
@@ -178,6 +207,7 @@ class Settings(BaseSettings):
     frontend: FrontendSettings = Field(default_factory=FrontendSettings)
     session: SessionSettings = Field(default_factory=SessionSettings)
     clarification: ClarificationSettings = Field(default_factory=ClarificationSettings)
+    analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
     delivery: DeliverySettings = Field(default_factory=DeliverySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     log: LogSettings = Field(default_factory=LogSettings)

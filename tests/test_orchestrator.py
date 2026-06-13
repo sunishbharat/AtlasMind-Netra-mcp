@@ -15,7 +15,7 @@ from memory.session_store import ClarificationState, InMemorySessionStore
 from models.clarification import ClarificationNeeded, ResolvedTerms, TermResolutionOutput
 from models.frontend import InjectAck
 from models.jira import JiraField
-from models.lite import LiteQueryResult
+from models.lite import IssueDetailsResponse, LiteQueryResult
 from models.vocab import VocabEntry
 
 QUESTION = "Does your team use label=escalation or priority=Critical/Blocker?"
@@ -83,6 +83,15 @@ class FakeLite:
         return LiteQueryResult(
             type="jql", answer="Found 1 result(s).", jql=self.jql, total=1, shown=1
         )
+
+    async def get_issue_details(
+        self,
+        issue_keys: list[str],
+        *,
+        comments_limit: int | None = None,
+        request_id: str | None = None,
+    ) -> IssueDetailsResponse:
+        return IssueDetailsResponse(issues=[])
 
 
 class FakeFrontend:
@@ -342,3 +351,55 @@ async def test_report_delivery_failure_degrades(settings: Settings) -> None:
     assert response.jql == "project = CAR"  # the query result is unaffected
     assert response.report_path is None
     assert any("report not written" in e for e in response.errors)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch failure re-clarification behavior
+# ---------------------------------------------------------------------------
+
+
+async def test_jql_execution_failure_with_active_terms_asks_for_rephrasing(
+    settings: Settings,
+) -> None:
+    """When JQL dispatch fails after term interpretation, ask the user to correct or rephrase."""
+    orch, _, _, _ = make_orchestrator(settings, lite=FakeLite(fail=True))
+    # Round 1: question is issued for "escalation".
+    await orch.handle_query(query="show escalations", session_id="s1")
+    # Round 2: answer resolves the term; dispatch fails with a Jira execution error.
+    response = await orch.handle_query(
+        query="show escalations",
+        session_id="s1",
+        clarification_answer="we use the escalation label",
+    )
+    assert response.requires_user_input is True
+    assert response.clarification_question is not None
+    assert "escalation" in response.clarification_question
+    assert "labels = escalation" in response.clarification_question
+    assert any("backend down" in e for e in response.errors)
+
+
+async def test_transport_failure_does_not_ask_for_rephrasing(settings: Settings) -> None:
+    """Transport errors are not mis-interpretation signals; return error only."""
+
+    class TransportFailLite(FakeLite):
+        async def query(self, text: str, **kwargs: object) -> LiteQueryResult:
+            self.queries.append(text)
+            raise LiteBackendError("backend unreachable after retries: connection refused")
+
+    orch, _, _, _ = make_orchestrator(settings, lite=TransportFailLite())
+    await orch.handle_query(query="show escalations", session_id="s1")
+    response = await orch.handle_query(
+        query="show escalations",
+        session_id="s1",
+        clarification_answer="we use the escalation label",
+    )
+    assert response.requires_user_input is False
+    assert any("backend unreachable after retries" in e for e in response.errors)
+
+
+async def test_jql_failure_with_no_active_terms_returns_error_only(settings: Settings) -> None:
+    """When no term interpretations were applied, a JQL failure returns an error, not a question."""
+    orch, _, _, _ = make_orchestrator(settings, lite=FakeLite(fail=True))
+    response = await orch.handle_query(query="list bugs in project CAR", session_id="s1")
+    assert response.requires_user_input is False
+    assert any("backend down" in e for e in response.errors)

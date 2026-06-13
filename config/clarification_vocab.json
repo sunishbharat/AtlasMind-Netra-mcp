@@ -79,5 +79,17 @@
       "due": "due < now() AND resolution = Unresolved",
       "fix_version": "fixVersion in unreleasedVersions() AND due < now()"
     }
+  },
+  "risk": {
+    "ambiguity": "Not a standard JQL term - could be a custom Jira field (Risk Level, Risk), a label, or colloquially any issue threatening delivery",
+    "questions": [
+      "When you say 'risk', what do you mean? For example: a specific Jira Risk Level field, a label (labels = risk), overdue issues, blocked issues, or something else your team tracks?"
+    ],
+    "jql_patterns": {
+      "label": "labels = risk",
+      "overdue": "due < now() AND resolution = Unresolved",
+      "blocked": "status = Blocked OR flagged is not EMPTY",
+      "fix_version": "fixVersion in unreleasedVersions() AND due < now()"
+    }
   }
 }

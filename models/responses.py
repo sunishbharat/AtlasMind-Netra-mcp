@@ -3,6 +3,9 @@
 QueryResponse is fully used in Milestone 1. BriefingResponse, ReportResponse, and
 JiraContextResponse are the declared schemas of the stub tools; they gain fields when
 Milestones 2 and 3 implement those tools.
+
+Citation, IssueAnalysisSuggestions, and BlockerAnalysis are the internal analysis output
+models introduced in Milestone 2 (IssueAnalyser + RankingEngine).
 """
 
 from typing import Any, Literal
@@ -62,6 +65,17 @@ class QueryResponse(BaseModel):
         description="Non-fatal problems; a degraded answer is still returned (Rule 5: "
         "partial failure is a designed state).",
     )
+    data_scope: str = Field(
+        default=(
+            "issue metadata only (key, summary, status, priority, assignee, dates). "
+            "Comment text, issue links, and changelog are not available via query_jira."
+        ),
+        description=(
+            "Machine-readable signal of what data is present in this response. "
+            "Always 'issue metadata only ...' for query_jira; generate_briefing "
+            "(M3) will carry a different value when comment-grounded analysis is available."
+        ),
+    )
 
 
 class BriefingResponse(BaseModel):
@@ -91,3 +105,65 @@ class JiraContextResponse(BaseModel):
     fields: list[JiraField] = Field(default_factory=list)
     priorities: list[str] = Field(default_factory=list)
     issue_types: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Milestone 2 - Issue analysis output models
+# ---------------------------------------------------------------------------
+
+
+class Citation(BaseModel):
+    """A factual claim's source: the Jira issue (and optionally a specific comment)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    issue_key: str
+    comment_id: str | None = None
+
+
+class IssueAnalysisSuggestions(BaseModel):
+    """The three AI-generated fields only.
+
+    This is the PydanticAI output_type for the IssueAnalyser agent. Fact fields
+    (blocked_reason, days_blocked, owner, dependent_issues) are computed in pure Python
+    before and after the LLM call - they are never generated.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    suggested_resolution: str
+    mitigation: str
+    risk_note: str
+    evidence: list[Citation] = Field(default_factory=list)
+
+
+class BlockerAnalysis(BaseModel):
+    """Per-issue analysis output from IssueAnalyser, scored by RankingEngine.
+
+    Fields marked FACT are derived from Jira data (computations in pure Python).
+    Fields marked AI SUGGESTION are LLM-generated and are structurally separated so
+    callers and renderers can label them accordingly (trust rules, design doc).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    issue_key: str
+    summary: str
+
+    # FACT fields - computed from Jira data, never generated
+    blocked_reason: str
+    days_blocked: int
+    owner: str
+    priority: str | None = None
+    dependent_issues: list[str] = Field(default_factory=list)
+    due_date: str | None = None
+    flagged: bool = False
+
+    # AI SUGGESTION fields - generated, must be visually separated in the UI
+    suggested_resolution: str
+    mitigation: str
+    risk_note: str
+    evidence: list[Citation] = Field(default_factory=list)
+
+    # Set by RankingEngine via model_copy(update={"score": ...})
+    score: float = 0.0

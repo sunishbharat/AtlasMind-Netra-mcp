@@ -8,6 +8,8 @@ with exponential backoff + jitter; HTTP 4xx and in-band "Error: ..." answers are
 backend already runs its own JQL retry loop.
 """
 
+import asyncio
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -21,7 +23,12 @@ from tenacity import (
 
 from config.settings import LITE_ERROR_PREFIX, LiteSettings
 from core.exceptions import LiteBackendError
-from models.lite import LiteQueryRequest, LiteQueryResult
+from models.lite import (
+    IssueDetailsRequest,
+    IssueDetailsResponse,
+    LiteQueryRequest,
+    LiteQueryResult,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -79,7 +86,9 @@ class AtlasMindLiteClient:
             if value
         }
         try:
-            response = await self._post_with_retry(request, headers)
+            response = await self._post_with_retry(
+                self._settings.query_path, request.model_dump(exclude_none=True), headers
+            )
         except (httpx.HTTPError, _ServiceUnavailableError) as exc:
             raise LiteBackendError(f"backend unreachable after retries: {exc}") from exc
 
@@ -97,8 +106,76 @@ class AtlasMindLiteClient:
             raise LiteBackendError(result.answer.removeprefix(LITE_ERROR_PREFIX))
         return result
 
+    async def get_issue_details(
+        self,
+        issue_keys: list[str],
+        *,
+        comments_limit: int | None = None,
+        request_id: str | None = None,
+    ) -> IssueDetailsResponse:
+        """POST /issue_details; returns raw per-issue content or raises LiteBackendError.
+
+        Backend endpoint is live (Milestone 2). See docs/atlasmind_lite_api_contract.md.
+        Lists larger than 50 keys are split into batches of 50 and fanned out concurrently;
+        results are merged. Keys not found in Jira are returned in `not_found`, not raised.
+        """
+        resolved_limit = (
+            comments_limit if comments_limit is not None else self._settings.comments_limit_default
+        )
+        chunk_size = 50
+        chunks = [issue_keys[i : i + chunk_size] for i in range(0, len(issue_keys), chunk_size)]
+
+        if len(chunks) <= 1:
+            return await self._fetch_issue_details_batch(
+                chunks[0] if chunks else [], resolved_limit, request_id
+            )
+
+        batch_results = await asyncio.gather(
+            *[self._fetch_issue_details_batch(chunk, resolved_limit, None) for chunk in chunks]
+        )
+        merged_issues = [issue for r in batch_results for issue in r.issues]
+        merged_not_found = [key for r in batch_results for key in r.not_found]
+        first_error = next((r.error for r in batch_results if r.error is not None), None)
+        return IssueDetailsResponse(
+            issues=merged_issues, not_found=merged_not_found, error=first_error
+        )
+
+    async def _fetch_issue_details_batch(
+        self,
+        issue_keys: list[str],
+        comments_limit: int,
+        request_id: str | None,
+    ) -> IssueDetailsResponse:
+        """POST /issue_details for a single batch of <= 50 keys."""
+        request = IssueDetailsRequest(
+            issue_keys=issue_keys,
+            request_id=request_id or str(uuid4()),
+            comments_limit=comments_limit,
+        )
+        try:
+            response = await self._post_with_retry(
+                self._settings.issue_details_path,
+                request.model_dump(exclude_none=True),
+                {},
+            )
+        except (httpx.HTTPError, _ServiceUnavailableError) as exc:
+            raise LiteBackendError(f"backend unreachable after retries: {exc}") from exc
+
+        if response.status_code != 200:
+            detail = self._error_detail(response)
+            raise LiteBackendError(f"backend returned HTTP {response.status_code}: {detail}")
+
+        try:
+            result = IssueDetailsResponse.model_validate(response.json())
+        except ValueError as exc:
+            raise LiteBackendError(f"backend response does not match contract: {exc}") from exc
+
+        if result.error is not None and result.error.startswith(LITE_ERROR_PREFIX):
+            raise LiteBackendError(result.error.removeprefix(LITE_ERROR_PREFIX))
+        return result
+
     async def _post_with_retry(
-        self, request: LiteQueryRequest, headers: dict[str, str]
+        self, path: str, payload: dict[str, Any], headers: dict[str, str]
     ) -> httpx.Response:
         retrying = AsyncRetrying(
             stop=stop_after_attempt(self._settings.max_retries),
@@ -112,11 +189,7 @@ class AtlasMindLiteClient:
         response: httpx.Response | None = None
         async for attempt in retrying:
             with attempt:
-                response = await self._http.post(
-                    self._settings.query_path,
-                    json=request.model_dump(exclude_none=True),
-                    headers=headers,
-                )
+                response = await self._http.post(path, json=payload, headers=headers)
                 if response.status_code == 503:
                     logger.warning("lite_backend_initialising", detail=self._error_detail(response))
                     raise _ServiceUnavailableError("backend model not initialised (HTTP 503)")

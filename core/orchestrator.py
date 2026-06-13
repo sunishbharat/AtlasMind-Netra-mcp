@@ -34,7 +34,7 @@ from memory.session_store import (
 from models.clarification import ClarificationNeeded, ResolvedTerms
 from models.frontend import InjectAck
 from models.jira import JiraField
-from models.lite import LiteQueryResult
+from models.lite import IssueDetailsResponse, LiteQueryResult
 from models.responses import AppliedConvention, QueryResponse
 from models.vocab import VocabEntry
 
@@ -79,6 +79,14 @@ class LiteClientPort(Protocol):
         jira_email: str | None = None,
         jira_url: str | None = None,
     ) -> LiteQueryResult: ...
+
+    async def get_issue_details(
+        self,
+        issue_keys: list[str],
+        *,
+        comments_limit: int | None = None,
+        request_id: str | None = None,
+    ) -> IssueDetailsResponse: ...
 
 
 class FrontendPort(Protocol):
@@ -296,12 +304,36 @@ class Orchestrator:
         try:
             result = await self._lite.query(enriched, limit=limit)
         except LiteBackendError as exc:
-            log.error("lite_dispatch_failed", error=str(exc))
-            failure = QueryResponse(
-                session_id=session.session_id,
-                applied_conventions=applied,
-                errors=[*errors, str(exc)],
-            )
+            error_msg = str(exc)
+            log.error("lite_dispatch_failed", error=error_msg)
+            is_transport = error_msg.startswith("backend unreachable after retries")
+            if active and not is_transport:
+                # Execution error with active term interpretations: the interpretation is
+                # likely wrong. Ask the user to correct or rephrase rather than silently
+                # failing - a JQL execution failure is a definite mis-interpretation signal.
+                hints = "; ".join(f'"{r.term}" as {r.jql_hint}' for r in active.values())
+                question = (
+                    f"The query could not be executed: {error_msg[:300]}. "
+                    f"I applied these interpretations: {hints}. "
+                    f"If any are wrong, please clarify or rephrase your query."
+                )
+                log.info(
+                    "dispatch_failed_asking_for_rephrasing",
+                    applied_terms=list(active.keys()),
+                )
+                failure = QueryResponse(
+                    session_id=session.session_id,
+                    requires_user_input=True,
+                    clarification_question=question,
+                    applied_conventions=applied,
+                    errors=[*errors, error_msg],
+                )
+            else:
+                failure = QueryResponse(
+                    session_id=session.session_id,
+                    applied_conventions=applied,
+                    errors=[*errors, error_msg],
+                )
             return await self._with_report(query, failure, log)
 
         log.info("query_dispatched", jql=result.jql, total=result.total, shown=result.shown)

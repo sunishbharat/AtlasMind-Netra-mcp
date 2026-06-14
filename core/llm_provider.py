@@ -4,7 +4,7 @@ Each supported backend has a dedicated subclass of LLMProvider. To add a new
 provider: subclass LLMProvider, implement make_model() and validate_credentials(),
 then add a branch in create_llm_provider().
 
-Pattern mirrors the backend client design (aMind-partial/core/{provider}_client.py)
+Pattern mirrors the AtlasMind backend client design
 adapted for PydanticAI model resolution instead of direct API calls.
 """
 
@@ -104,7 +104,7 @@ class BedrockLLMProvider(LLMProvider):
     """AWS Bedrock provider via PydanticAI's BedrockConverseModel.
 
     Credentials are read from the standard boto3 credential chain:
-    AWS_BEARER_TOKEN_BEDROCK (bearer token, same as the aMind-partial backend),
+    AWS_BEARER_TOKEN_BEDROCK (bearer token, same as the AtlasMind backend),
     AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, ~/.aws/credentials, or an IAM role.
     Region is read from AWS_DEFAULT_REGION; override with NETRA_LLM__BASE_URL for
     a custom Bedrock endpoint URL.

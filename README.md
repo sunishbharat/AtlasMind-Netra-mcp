@@ -75,7 +75,7 @@ Add this to `claude_desktop_config.json` (Settings -> Developer -> Edit Config):
       "command": "uv",
       "args": [
         "--directory",
-        "C:\\Users\\sunis\\Sunish\\Development\\AtlasMind-Netra-mcp",
+        "\\path\\to\\AtlasMind-Netra-mcp",
         "run",
         "python",
         "server.py"

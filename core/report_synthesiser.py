@@ -1,17 +1,14 @@
 """Markdown report builder (design doc: ReportSynthesiser).
 
-Milestone 1a scope: one human-verifiable report per dispatched query, so every output can
-be reviewed by a person. Briefing sections (ranked blockers, citations, multi-topic
-reports) extend this class in Milestone 3.
-
-Trust rules honoured: facts come straight from the backend payload; applied
-interpretations are listed so a wrong assumption is caught in the output, not weeks later.
+Builds human-verifiable markdown reports for every dispatched query and briefing.
+Trust rules honoured: facts come straight from the backend payload; AI suggestions are
+labelled explicitly; applied interpretations are listed so wrong assumptions are caught.
 """
 
 from datetime import UTC, datetime
 from typing import Any
 
-from models.responses import QueryResponse
+from models.responses import BlockerAnalysis, BriefingSection, QueryResponse
 
 _MAX_DEFAULT_COLUMNS = 8
 
@@ -89,6 +86,78 @@ class ReportSynthesiser:
         ]
         return "\n".join(lines) + "\n"
 
+    def build_briefing_report(
+        self,
+        *,
+        agenda_text: str,
+        sections: list[BriefingSection],
+        session_id: str,
+        generated_at: datetime | None = None,
+    ) -> str:
+        """Assemble a multi-topic briefing markdown report with ranked issues and AI labels."""
+        timestamp = (generated_at or datetime.now(UTC)).isoformat(timespec="seconds")
+        lines: list[str] = [
+            "# AtlasMind executive briefing",
+            "",
+            f"- Generated: {timestamp}",
+            f"- Session: {session_id}",
+            f"- Topics: {len(sections)}",
+            "",
+            "## Agenda",
+            "",
+            f"> {_cell(agenda_text[:500])}",
+            "",
+            "---",
+            "",
+        ]
+        for section in sections:
+            lines += self._section_lines(section)
+
+        lines += [
+            "---",
+            "",
+            "**AI SUGGESTION** fields (suggested_resolution, mitigation, risk_note) are "
+            "LLM-generated and labelled as such. Facts (days_blocked, owner, priority, "
+            "blocked_reason) are derived from Jira data. Citations reference Jira issue keys "
+            "and comment IDs.",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def _section_lines(self, section: BriefingSection) -> list[str]:
+        lines: list[str] = [
+            f"## {section.description}",
+            "",
+            f"- Query: {_cell(section.query_used or '(none)')}",
+            f"- JQL: `{_cell(section.jql or '(none)')}`",
+            f"- Total found: {section.total_found}",
+            f"- Top {len(section.top_issues)} shown",
+            "",
+        ]
+        if section.errors:
+            lines += ["**Warnings:**", *[f"- {_cell(e)}" for e in section.errors], ""]
+
+        if not section.top_issues:
+            lines += ["(no issues to display)", "", "---", ""]
+            return lines
+
+        lines += [
+            "| # | Key | Summary | Priority | Days Blocked | Owner | Score |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for rank, issue in enumerate(section.top_issues, start=1):
+            lines.append(
+                f"| {rank} | {_cell(issue.issue_key)} | {_cell(issue.summary)}"
+                f" | {_cell(issue.priority or '-')} | {issue.days_blocked}"
+                f" | {_cell(issue.owner)} | {issue.score:.0f} |"
+            )
+        lines.append("")
+
+        for issue in section.top_issues:
+            lines += _issue_detail_lines(issue)
+
+        lines += ["---", ""]
+        return lines
+
     def _issues_table(self, response: QueryResponse) -> list[str]:
         columns = response.display_fields or _default_columns(response.issues[0])
         table = [
@@ -115,6 +184,30 @@ def _issue_value(issue: dict[str, Any], column: str) -> object:
         if candidate in issue:
             return issue[candidate]
     return ""
+
+
+def _issue_detail_lines(issue: BlockerAnalysis) -> list[str]:
+    deps = ", ".join(issue.dependent_issues) if issue.dependent_issues else "none"
+    citations = (
+        ", ".join(
+            c.issue_key + (f" comment {c.comment_id}" if c.comment_id else "")
+            for c in issue.evidence
+        )
+        if issue.evidence
+        else "none"
+    )
+    return [
+        f"### {issue.issue_key}: {_cell(issue.summary)}",
+        "",
+        f"**Blocked reason (FACT):** {_cell(issue.blocked_reason)}",
+        f"**Dependent issues (FACT):** {deps}",
+        f"**Citations:** {citations}",
+        "",
+        f"**Suggested resolution (AI SUGGESTION):** {_cell(issue.suggested_resolution)}",
+        f"**Mitigation (AI SUGGESTION):** {_cell(issue.mitigation)}",
+        f"**Risk (AI SUGGESTION):** {_cell(issue.risk_note)}",
+        "",
+    ]
 
 
 def _cell(value: object) -> str:

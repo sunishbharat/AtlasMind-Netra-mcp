@@ -9,6 +9,7 @@ import pytest
 from config.settings import LiteSettings
 from core.atlasmind_lite_client import AtlasMindLiteClient
 from core.exceptions import LiteBackendError
+from models.lite import LiteQueryResult
 
 OK_ISSUE_DETAILS_PAYLOAD = {
     "issues": [
@@ -301,3 +302,19 @@ async def test_get_issue_details_batch_error_propagates() -> None:
 
     with pytest.raises(LiteBackendError, match="HTTP 422"):
         await make_client(handler).get_issue_details([f"CAR-{i}" for i in range(55)])
+
+
+def test_lite_query_result_normalises_jira_type_enum_prefix() -> None:
+    """Backend may return 'JiraAuthType.server' instead of 'server' - validator strips prefix."""
+    result = LiteQueryResult.model_validate({"jira_type": "JiraAuthType.server"})
+    assert result.jira_type == "server"
+
+    result = LiteQueryResult.model_validate({"jira_type": "JiraAuthType.cloud"})
+    assert result.jira_type == "cloud"
+
+
+def test_lite_query_result_accepts_canonical_jira_type_values() -> None:
+    """Plain 'cloud' and 'server' still pass through unchanged."""
+    assert LiteQueryResult.model_validate({"jira_type": "server"}).jira_type == "server"
+    assert LiteQueryResult.model_validate({"jira_type": "cloud"}).jira_type == "cloud"
+    assert LiteQueryResult.model_validate({"jira_type": None}).jira_type is None

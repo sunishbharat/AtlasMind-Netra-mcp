@@ -43,6 +43,27 @@ def test_loads_wrapped_object(tmp_path: Path) -> None:
     assert len(JiraFieldsLoader(path, None).load_fields()) == 2
 
 
+def test_loads_dict_keyed_format(tmp_path: Path) -> None:
+    """Native Jira API format: root object with field IDs as keys."""
+    path = tmp_path / "jira_fields.json"
+    path.write_text(
+        json.dumps(
+            {
+                "summary": {"id": "summary", "name": "Summary", "custom": False},
+                "customfield_10001": {
+                    "id": "customfield_10001",
+                    "name": "Epic Link",
+                    "custom": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    fields = JiraFieldsLoader(path, None).load_fields()
+    assert len(fields) == 2
+    assert {f.id for f in fields} == {"summary", "customfield_10001"}
+
+
 def test_corrupt_fields_file_degrades(tmp_path: Path) -> None:
     path = tmp_path / "jira_fields.json"
     path.write_text("{broken", encoding="utf-8")

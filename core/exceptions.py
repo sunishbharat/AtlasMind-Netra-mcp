@@ -28,3 +28,7 @@ class StateTransitionError(NetraError):
 
 class AnalysisError(NetraError):
     """IssueAnalyser LLM call failed or produced unusable output after retries."""
+
+
+class DecompositionError(NetraError):
+    """AgendaDecomposer LLM call failed or produced unusable output after retries."""

@@ -21,10 +21,20 @@ def test_detection_is_case_insensitive(vocab: VocabLookup) -> None:
 
 def test_no_match_inside_longer_words(vocab: VocabLookup) -> None:
     classifier = IntentClassifier(vocab)
-    # "opened" must not trigger "open"; "unblocked" must not trigger "blocked".
+    # "opened" must not trigger "open"; "unblocked" must not trigger "blocker".
     assert classifier.detect("issues opened and unblocked yesterday") == []
 
 
 def test_unambiguous_query_yields_nothing(vocab: VocabLookup) -> None:
     classifier = IntentClassifier(vocab)
     assert classifier.detect("list bugs in project CAR") == []
+
+
+def test_detects_blocker_plural(vocab: VocabLookup) -> None:
+    classifier = IntentClassifier(vocab)
+    assert classifier.detect("highlight newly created blockers") == ["blocker"]
+
+
+def test_detects_status_report_phrase(vocab: VocabLookup) -> None:
+    classifier = IntentClassifier(vocab)
+    assert classifier.detect("generate a status report for last week") == ["status report"]

@@ -38,7 +38,7 @@
       "status": "status not in (Done, Closed)"
     }
   },
-  "blocked": {
+  "blocker": {
     "ambiguity": "Could be a status, a flag, a label, or a 'is blocked by' link",
     "questions": [
       "Does your team mark blocked work with a Blocked status, the Flagged field, a label, or 'is blocked by' issue links?"
@@ -90,6 +90,16 @@
       "overdue": "due < now() AND resolution = Unresolved",
       "blocked": "status = Blocked OR flagged is not EMPTY",
       "fix_version": "fixVersion in unreleasedVersions() AND due < now()"
+    }
+  },
+  "status report": {
+    "ambiguity": "Scope is undefined: which Jira projects or teams should this cover?",
+    "questions": [
+      "Which Jira projects should this status report cover? List project keys (e.g. CAR, BOM) or say 'all projects' to include everything your profile can access."
+    ],
+    "jql_patterns": {
+      "project_filter": "project in (PROJECT_KEYS)",
+      "all": "project is not EMPTY"
     }
   }
 }

@@ -7,7 +7,7 @@ versions without a contract bump.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LiteQueryRequest(BaseModel):
@@ -67,6 +67,17 @@ class LiteQueryResult(BaseModel):
     profile: str | None = None
     jira_base_url: str | None = None
     jira_type: Literal["cloud", "server"] | None = None
+
+    @field_validator("jira_type", mode="before")
+    @classmethod
+    def _normalise_jira_type(cls, v: object) -> object:
+        # Backend may serialize its JiraAuthType enum as "JiraAuthType.server" instead of "server".
+        if isinstance(v, str) and v.startswith("JiraAuthType."):
+            return v[len("JiraAuthType.") :]
+        if v is not None and not isinstance(v, str):
+            raise ValueError(f"jira_type must be a string or null, got {type(v).__name__}: {v!r}")
+        return v
+
     answer: str | None = None
     jql: str | None = None
     total: int = 0

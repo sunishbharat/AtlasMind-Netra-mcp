@@ -79,21 +79,56 @@ class QueryResponse(BaseModel):
 
 
 class BriefingResponse(BaseModel):
-    """Placeholder schema for generate_briefing (implemented in Milestone 3)."""
+    """Result of the generate_briefing tool.
+
+    When `requires_user_input` is true the host MUST present `clarification_question`
+    verbatim for the pending topic and call generate_briefing again with the answer.
+    `pending_topic_id` identifies which topic triggered the question.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     report_id: str
-    view_url: str | None = None
+    session_id: str
+    requires_user_input: bool = False
+    clarification_question: str | None = None
+    pending_topic_id: str | None = None
+    sections: list["BriefingSection"] = Field(default_factory=list)
+    report_path: str | None = Field(
+        default=None,
+        description="Path to the human-verifiable markdown report written for this briefing.",
+    )
+    view_url: str | None = Field(
+        default=None,
+        description="URL to the rendered briefing in AtlasMind-frontendUI (M4, when configured).",
+    )
+    errors: list[str] = Field(default_factory=list)
+    data_scope: str = Field(
+        default=(
+            "issue content (comments, links, changelog) from /issue_details, "
+            "analysed and ranked per agenda topic."
+        ),
+        description="Machine-readable signal of what data is present in this response.",
+    )
 
 
 class ReportResponse(BaseModel):
-    """Placeholder schema for get_report (implemented in Milestone 3)."""
+    """Result of the get_report tool - structured briefing data + view_url."""
 
     model_config = ConfigDict(frozen=True)
 
     report_id: str
+    sections: list["BriefingSection"] = Field(default_factory=list)
+    report_path: str | None = None
     view_url: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    data_scope: str = Field(
+        default=(
+            "issue content (comments, links, changelog) from /issue_details, "
+            "analysed and ranked per agenda topic."
+        ),
+        description="Machine-readable signal of what data is present in this response.",
+    )
 
 
 class JiraContextResponse(BaseModel):
@@ -167,3 +202,46 @@ class BlockerAnalysis(BaseModel):
 
     # Set by RankingEngine via model_copy(update={"score": ...})
     score: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3 - Briefing pipeline models
+# ---------------------------------------------------------------------------
+
+
+class AgendaTopic(BaseModel):
+    """One data question extracted from an agenda item by AgendaDecomposer."""
+
+    model_config = ConfigDict(frozen=True)
+
+    topic_id: str
+    description: str
+    suggested_query: str
+    projects: list[str] = Field(default_factory=list)
+
+
+class AgendaDecomposition(BaseModel):
+    """PydanticAI output type for AgendaDecomposer: structured list of agenda topics."""
+
+    model_config = ConfigDict(frozen=True)
+
+    topics: list[AgendaTopic]
+
+
+class BriefingSection(BaseModel):
+    """One section of a briefing report: one agenda topic mapped to ranked issues."""
+
+    model_config = ConfigDict(frozen=True)
+
+    topic_id: str
+    description: str
+    query_used: str | None = None
+    jql: str | None = None
+    top_issues: list[BlockerAnalysis] = Field(default_factory=list)
+    total_found: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+# Resolve forward references in BriefingResponse and ReportResponse.
+BriefingResponse.model_rebuild()
+ReportResponse.model_rebuild()

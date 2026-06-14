@@ -24,9 +24,24 @@ class LLMSettings(BaseModel):
 
     model: str = Field(
         default="groq:llama-3.3-70b-versatile",
-        description="PydanticAI model string, e.g. 'groq:llama-3.3-70b-versatile' or "
-        "'anthropic:claude-sonnet-4-6'. The provider API key (e.g. GROQ_API_KEY) is read "
-        "from the environment by PydanticAI itself and is never stored in settings.",
+        description="PydanticAI model string, e.g. 'groq:llama-3.3-70b-versatile', "
+        "'anthropic:claude-sonnet-4-6', or 'openai:minimax-m2.7' (for OpenAI-compatible "
+        "backends). The provider API key is read from the environment by PydanticAI "
+        "itself and is never stored in settings. For OpenAI-compatible providers, set "
+        "base_url below to override the default OpenAI endpoint.",
+    )
+    base_url: str | None = Field(
+        default=None,
+        description="Custom base URL for OpenAI-compatible and Bedrock providers. "
+        "For openai: models, overrides the default OpenAI endpoint "
+        "(e.g. 'https://integrate.api.nvidia.com/v1' for NVIDIA NIM). "
+        "For bedrock: models, sets a custom Bedrock endpoint URL. "
+        "Set NETRA_LLM__BASE_URL to override.",
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for OpenAI-compatible providers (e.g. NVIDIA NIM nvapi-... key). "
+        "Set NETRA_LLM__API_KEY. Only used when model starts with 'openai:'.",
     )
     retries: int = Field(
         default=2, description="PydanticAI retries when the model output fails validation."
@@ -128,15 +143,24 @@ class ClarificationSettings(BaseModel):
 
 
 class AnalysisSettings(BaseModel):
-    """IssueAnalyser and RankingEngine configuration (Milestone 2)."""
+    """IssueAnalyser, RankingEngine, and AgendaDecomposer configuration (Milestones 2-3)."""
 
     prompt_path: Path = Field(
         default=Path("prompts/issue_analysis_prompt.md"),
         description="System prompt for the issue analyser LLM.",
     )
+    agenda_prompt_path: Path = Field(
+        default=Path("prompts/agenda_decomposition_prompt.md"),
+        description="System prompt for the agenda decomposer LLM (Milestone 3).",
+    )
     max_concurrency: int = Field(
-        default=5,
-        description="Max concurrent per-issue LLM calls in IssueAnalyser.",
+        default=2,
+        description=(
+            "Max concurrent per-issue LLM calls in IssueAnalyser. "
+            "Keep at 2 for Groq free tier or Anthropic Tier-1 (burst limits); "
+            "raise to 5+ for paid/higher-tier accounts or self-hosted models. "
+            "Override with NETRA_ANALYSIS__MAX_CONCURRENCY."
+        ),
     )
     blocked_statuses: list[str] = Field(
         default_factory=lambda: ["Blocked", "Stalled", "On Hold", "Waiting"],
@@ -146,6 +170,37 @@ class AnalysisSettings(BaseModel):
     ranking_rule_path: Path = Field(
         default=Path("config/ranking_default.json"),
         description="Path to the ranking weights JSON file.",
+    )
+
+
+class BriefingSettings(BaseModel):
+    """generate_briefing pipeline configuration (Milestone 3)."""
+
+    top_n: int = Field(
+        default=5,
+        description="Top N ranked issues per briefing section.",
+    )
+    issues_per_topic: int = Field(
+        default=50,
+        description="Max issues fetched per topic query (limit forwarded to the backend).",
+    )
+    max_topics: int = Field(
+        default=10,
+        description="Max agenda topics AgendaDecomposer will extract from one agenda.",
+    )
+    max_analysed_issues: int = Field(
+        default=30,
+        description=(
+            "Hard cap on the total number of issues sent to IssueAnalyser per briefing. "
+            "Applied after cross-topic deduplication. Prevents timeouts on large result sets. "
+            "Issues are taken in order (topic_1 first, then topic_2, etc.). "
+            "Override with NETRA_BRIEFING__MAX_ANALYSED_ISSUES."
+        ),
+    )
+    view_url_base: str | None = Field(
+        default=None,
+        description="Base URL for briefing views in AtlasMind-frontendUI (M4). "
+        "e.g. 'http://localhost:3000/briefing' -> view_url = '{base}/{report_id}'.",
     )
 
 
@@ -208,6 +263,7 @@ class Settings(BaseSettings):
     session: SessionSettings = Field(default_factory=SessionSettings)
     clarification: ClarificationSettings = Field(default_factory=ClarificationSettings)
     analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
+    briefing: BriefingSettings = Field(default_factory=BriefingSettings)
     delivery: DeliverySettings = Field(default_factory=DeliverySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     log: LogSettings = Field(default_factory=LogSettings)

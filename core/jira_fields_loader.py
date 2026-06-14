@@ -44,9 +44,14 @@ class JiraFieldsLoader:
             return []
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            # Contract: a bare array, or a {"fields": [...]} wrapper.
-            entries = raw.get("fields", []) if isinstance(raw, dict) else raw
-            return [JiraField.model_validate(entry) for entry in entries]
+            # Contract: bare array, {"fields": [...]} wrapper, or native Jira dict-keyed format.
+            if isinstance(raw, dict):
+                entries = raw["fields"] if "fields" in raw else list(raw.values())
+            else:
+                entries = raw
+            fields = [JiraField.model_validate(entry) for entry in entries]
+            logger.info("jira_fields_loaded", path=str(path), count=len(fields))
+            return fields
         except (OSError, json.JSONDecodeError, ValidationError, AttributeError) as exc:
             logger.warning("jira_fields_unreadable", path=str(path), error=str(exc))
             return []
@@ -59,7 +64,9 @@ class JiraFieldsLoader:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise TypeError("expected a JSON object of field id -> values")
-            return {str(k): [str(v) for v in values] for k, values in raw.items()}
+            result = {str(k): [str(v) for v in values] for k, values in raw.items()}
+            logger.info("jira_allowed_values_loaded", path=str(path), count=len(result))
+            return result
         except (OSError, json.JSONDecodeError, TypeError) as exc:
             logger.warning("jira_allowed_values_unreadable", path=str(path), error=str(exc))
             return {}

@@ -1,10 +1,9 @@
 """Report delivery channels (design doc: Delivery).
 
-Strategy pattern: `BaseDeliveryChannel` is the swappable seam the design doc reserves for
-Teams / Slack / email; Milestone 1a ships the simplest implementation, a markdown file on
-disk, so every query output can be reviewed by a human with zero infrastructure. Future
-targets (Confluence, Teams webhook, ...) are new subclasses registered in the factory -
-call sites never change.
+Strategy pattern: `BaseDeliveryChannel` is the swappable seam for Teams / Slack / email.
+The current implementation writes a markdown file on disk so every query output can be
+reviewed by a human with zero infrastructure. Future targets (Confluence, Teams webhook,
+...) are new subclasses registered in the factory - call sites never change.
 """
 
 import asyncio

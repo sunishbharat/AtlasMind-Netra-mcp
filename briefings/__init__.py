@@ -1,2 +1,1 @@
-"""Briefing engine package: delivery channels now (Milestone 1a), templates and
-scheduler with Milestone 3."""
+"""Briefing engine package: delivery channels, templates, and scheduler."""

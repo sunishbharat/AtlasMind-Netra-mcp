@@ -1,7 +1,7 @@
 """Typed LLM outputs for the clarifier (PydanticAI output_type models).
 
 These are the only shapes the clarifier LLM is allowed to produce; raw completions are
-never parsed (Coding Guidelines Rule 2).
+never parsed.
 """
 
 from pydantic import BaseModel, ConfigDict, Field

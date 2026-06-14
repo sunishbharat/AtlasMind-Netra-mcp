@@ -1,7 +1,7 @@
 """Ad-hoc integration test: real server with fastmcp.Client in-memory transport.
 
 Run with:
-    python test_integration.py
+    python tests/test_integration.py
 
 Requires env vars pointing at a live lite backend:
     NETRA_LITE__BASE_URL=http://localhost:8000

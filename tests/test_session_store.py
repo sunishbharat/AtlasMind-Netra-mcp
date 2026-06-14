@@ -62,7 +62,7 @@ async def test_delete_is_idempotent() -> None:
 
 
 def test_every_allowed_transition() -> None:
-    # 100% transition coverage (Coding Guidelines Rule 5): every edge in the table works.
+    # 100% transition coverage: every edge in the allowed-transitions table works.
     for source, targets in _ALLOWED_TRANSITIONS.items():
         for target in targets:
             session = SessionState(session_id="s", state=source)

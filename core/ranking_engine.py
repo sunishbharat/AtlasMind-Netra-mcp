@@ -19,7 +19,7 @@ logger = structlog.get_logger(__name__)
 
 
 class RankingEnginePort(Protocol):
-    """Scoring seam for the briefing pipeline (Milestone 3)."""
+    """Scoring seam for the briefing pipeline."""
 
     def rank(
         self, analyses: list[BlockerAnalysis], top_n: int | None = None
@@ -83,7 +83,7 @@ class RankingEngine:
             w.dependent_issues.cap,
         )
 
-        # Milestone proximity score (overdue issues do not receive a proximity bonus)
+        # Due-date proximity score (overdue issues do not receive a proximity bonus)
         if analysis.due_date:
             try:
                 due = datetime.date.fromisoformat(analysis.due_date)

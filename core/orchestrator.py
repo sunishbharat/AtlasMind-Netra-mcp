@@ -262,8 +262,8 @@ class Orchestrator:
                 jql_hint=item.jql_hint,
                 source="clarification",
             )
-            # Learned once, never asked again (design doc). Milestone 1 has no project
-            # scope on query_jira, so conventions land at the instance-default level.
+            # Learned once, never asked again. query_jira has no project scope,
+            # so conventions land at the instance-default level.
             await self._conventions.set(
                 Convention(
                     project=INSTANCE_DEFAULT_PROJECT,

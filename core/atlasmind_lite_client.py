@@ -67,12 +67,12 @@ class AtlasMindLiteClient:
     ) -> LiteQueryResult:
         """POST /query; returns the parsed result or raises LiteBackendError.
 
-        The jira_* arguments become per-request auth headers (unused in Milestone 1 stdio
-        deployments, required for Milestone 4 per-session credential binding).
+        The jira_* arguments become per-request auth headers for per-session credential
+        binding; pass None to omit the corresponding header.
         """
         request = LiteQueryRequest(
             query=text,
-            # TODO(Milestone 2+): use this id with POST /event to cancel aborted queries.
+            # TODO: use this id with POST /event to cancel aborted queries.
             request_id=str(uuid4()),
             limit=limit if limit is not None else self._settings.default_limit,
         )
@@ -115,7 +115,7 @@ class AtlasMindLiteClient:
     ) -> IssueDetailsResponse:
         """POST /issue_details; returns raw per-issue content or raises LiteBackendError.
 
-        Backend endpoint is live (Milestone 2). See docs/atlasmind_lite_api_contract.md.
+        See docs/atlasmind_lite_api_contract.md.
         Lists larger than 50 keys are split into batches of 50 and fanned out concurrently;
         results are merged. Keys not found in Jira are returned in `not_found`, not raised.
         """

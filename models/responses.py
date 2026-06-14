@@ -1,11 +1,10 @@
-"""Response models for the four MCP tools (design doc: models/responses.py).
+"""Response models for the four MCP tools.
 
-QueryResponse is fully used in Milestone 1. BriefingResponse, ReportResponse, and
-JiraContextResponse are the declared schemas of the stub tools; they gain fields when
-Milestones 2 and 3 implement those tools.
+QueryResponse is the schema for query_jira results. BriefingResponse, ReportResponse,
+and JiraContextResponse are the schemas for the briefing tools.
 
 Citation, IssueAnalysisSuggestions, and BlockerAnalysis are the internal analysis output
-models introduced in Milestone 2 (IssueAnalyser + RankingEngine).
+models used by IssueAnalyser and RankingEngine.
 """
 
 from typing import Any, Literal
@@ -132,7 +131,7 @@ class ReportResponse(BaseModel):
 
 
 class JiraContextResponse(BaseModel):
-    """Placeholder schema for get_jira_context (implemented after Milestone 1)."""
+    """Schema for get_jira_context."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -143,7 +142,7 @@ class JiraContextResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Milestone 2 - Issue analysis output models
+# Issue analysis output models
 # ---------------------------------------------------------------------------
 
 
@@ -205,7 +204,7 @@ class BlockerAnalysis(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Milestone 3 - Briefing pipeline models
+# Briefing pipeline models
 # ---------------------------------------------------------------------------
 
 

@@ -1,8 +1,7 @@
 """LLM-backed clarification (design doc: Clarifier).
 
 All LLM calls go through PydanticAI with a typed output_type; raw completions are never
-parsed (Coding Guidelines Rule 2). PydanticAI failures are translated to ClarificationError
-at this boundary.
+parsed. PydanticAI failures are translated to ClarificationError at this boundary.
 """
 
 from pathlib import Path

@@ -1,8 +1,7 @@
-"""FastMCP entrypoint and composition root (design doc: server.py).
+"""FastMCP entrypoint and composition root.
 
 The entire object graph is wired in build_orchestrator/build_briefing_orchestrator and
-nowhere else (dependency injection, Coding Guidelines Rule 3). Four MCP tools are exposed;
-Milestone 3 implements generate_briefing and get_report.
+nowhere else (dependency injection). Four MCP tools are exposed.
 """
 
 import logging
@@ -278,7 +277,7 @@ def create_server(
         present `clarification_question` to the user VERBATIM for the pending topic and
         call this tool again with their answer as `clarification_answer`.
 
-        template_id is reserved for Milestone 4 briefing templates and has no effect yet.
+        template_id is reserved for future briefing templates and has no effect yet.
         """
         elicit = _make_elicit(ctx) if ctx is not None else None
         return await briefing_orch.generate_briefing(
@@ -303,7 +302,7 @@ def create_server(
         include_fields: bool = True, include_projects: bool = True
     ) -> JiraContextResponse:
         """Jira instance metadata: projects, fields, priorities, issue types."""
-        raise ToolError("get_jira_context is not implemented yet (planned after Milestone 1).")
+        raise ToolError("get_jira_context is not yet implemented.")
 
     return mcp
 

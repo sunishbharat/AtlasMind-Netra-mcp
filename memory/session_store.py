@@ -2,7 +2,7 @@
 
 State machine pattern: the clarification loop's states are an explicit Enum and every
 transition goes through `SessionState.transition`, which enforces the allowed-transitions
-table in one place (Coding Guidelines Rule 3).
+table in one place.
 
 Store phases (design doc): Phase 1 in-process dict with TTL (this module) -> Phase 2
 PostgreSQL -> Phase 3 Valkey, all behind `BaseSessionStore`.

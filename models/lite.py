@@ -94,7 +94,7 @@ class LiteQueryResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# POST /issue_details models (Milestone 2 - proposed to backend team)
+# POST /issue_details models
 # ---------------------------------------------------------------------------
 
 

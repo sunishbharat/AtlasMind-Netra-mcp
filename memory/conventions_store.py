@@ -34,7 +34,7 @@ class Convention(BaseModel):
 
 
 class BaseConventionsStore(ABC):
-    """Interface for convention persistence (dict/JSON now, Postgres in Milestone 4)."""
+    """Interface for convention persistence (dict/JSON now, Postgres in future)."""
 
     @abstractmethod
     async def get(self, project: str, term: str) -> Convention | None:

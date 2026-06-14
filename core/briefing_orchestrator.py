@@ -5,7 +5,6 @@ clarification), IssueAnalyser, RankingEngine, ReportSynthesiser, and DeliveryCha
 into a single generate_briefing call. Per-topic session IDs isolate clarification state
 so each topic's rounds are independent of the others.
 
-Design doc: Milestone 3 - generate_briefing end-to-end.
 """
 
 import asyncio

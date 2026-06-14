@@ -1,4 +1,4 @@
-"""Application settings - the single source of configuration (Coding Guidelines Rule 4).
+"""Application settings - the single source of configuration.
 
 Every constant, default, URL, timeout, and path lives here. Each field is overridable via
 environment variable with the ``NETRA_`` prefix and ``__`` as nested delimiter, e.g.
@@ -76,7 +76,7 @@ class LiteSettings(BaseModel):
         "The backend additionally enforces its own MAX_JIRA_RESULTS cap.",
     )
     issue_details_path: str = Field(
-        default="/issue_details", description="Issue details endpoint path (Milestone 2)."
+        default="/issue_details", description="Issue details endpoint path."
     )
     comments_limit_default: int = Field(
         default=20,
@@ -143,7 +143,7 @@ class ClarificationSettings(BaseModel):
 
 
 class AnalysisSettings(BaseModel):
-    """IssueAnalyser, RankingEngine, and AgendaDecomposer configuration (Milestones 2-3)."""
+    """IssueAnalyser, RankingEngine, and AgendaDecomposer configuration."""
 
     prompt_path: Path = Field(
         default=Path("prompts/issue_analysis_prompt.md"),
@@ -151,7 +151,7 @@ class AnalysisSettings(BaseModel):
     )
     agenda_prompt_path: Path = Field(
         default=Path("prompts/agenda_decomposition_prompt.md"),
-        description="System prompt for the agenda decomposer LLM (Milestone 3).",
+        description="System prompt for the agenda decomposer LLM.",
     )
     max_concurrency: int = Field(
         default=2,
@@ -174,7 +174,7 @@ class AnalysisSettings(BaseModel):
 
 
 class BriefingSettings(BaseModel):
-    """generate_briefing pipeline configuration (Milestone 3)."""
+    """generate_briefing pipeline configuration."""
 
     top_n: int = Field(
         default=5,
@@ -205,7 +205,7 @@ class BriefingSettings(BaseModel):
 
 
 class DeliverySettings(BaseModel):
-    """Report delivery (Milestone 1a: markdown file channel)."""
+    """Report delivery settings."""
 
     enabled: bool = Field(
         default=True,
@@ -213,7 +213,7 @@ class DeliverySettings(BaseModel):
     )
     channel: Literal["markdown_file"] = Field(
         default="markdown_file",
-        description="Delivery channel; Teams/Slack/email/Confluence arrive with Milestone 3.",
+        description="Delivery channel; supported values: markdown_file.",
     )
     output_dir: Path = Field(
         default=Path("data/reports"), description="Folder for markdown report files."

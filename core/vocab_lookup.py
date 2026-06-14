@@ -14,7 +14,7 @@ class VocabLookup:
     """Loads config/clarification_vocab.json and serves entries by term.
 
     Validated through pydantic at startup; malformed config fails fast with an error
-    naming the file and the offending term (Coding Guidelines Rule 4).
+    naming the file and the offending term.
     """
 
     def __init__(self, path: Path) -> None:

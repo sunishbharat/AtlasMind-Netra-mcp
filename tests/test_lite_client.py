@@ -182,7 +182,7 @@ async def test_health_true_and_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /issue_details tests (Milestone 2)
+# POST /issue_details tests
 # ---------------------------------------------------------------------------
 
 

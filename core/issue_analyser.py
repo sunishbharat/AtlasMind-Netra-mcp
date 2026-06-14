@@ -30,7 +30,7 @@ _DEFAULT_BLOCKED_STATUSES = frozenset({"blocked", "stalled", "on hold", "waiting
 
 
 class IssueAnalyserPort(Protocol):
-    """Analysis seam for the briefing pipeline (Milestone 3)."""
+    """Analysis seam for the briefing pipeline."""
 
     async def analyse(
         self,

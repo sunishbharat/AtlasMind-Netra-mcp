@@ -1,4 +1,4 @@
-"""Briefing pipeline session state (Milestone 3).
+"""Briefing pipeline session state.
 
 Stores multi-topic dispatch state across generate_briefing turns when MCP elicitation
 is unavailable and the host must do session round-trips for per-topic clarification.

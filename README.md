@@ -203,9 +203,3 @@ New lines appear as they are written - equivalent to `tail -f` on Linux. Press `
 ### Log format
 
 Console output is human-readable in dev mode and JSON when `NETRA_LOG__JSON_LOGS=true`. The log file is always JSON regardless of that setting, so it remains machine-readable even during local development. stdlib logs from httpx, asyncio, and other libraries are routed through the same pipeline and appear in both outputs.
-
-## Troubleshooting
-
-- **`invalid peer certificate: UnknownIssuer` from uv**: an antivirus or corporate proxy is intercepting HTTPS. Export its root CA, append it to a copy of the certifi bundle, and set `SSL_CERT_FILE` to the combined file before running uv.
-- **Clarifier errors about the model**: check `GROQ_API_KEY` is set and `NETRA_LLM__MODEL` names an available model. The server still answers queries (degraded, with a warning in `errors`) when the LLM is unreachable.
-- **Learned a wrong convention**: delete the offending entry from `data/conventions.json` (or the whole file); it is re-learned on the next clarification.

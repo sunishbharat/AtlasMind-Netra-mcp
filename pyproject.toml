@@ -7,12 +7,13 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.10",
-    "pydantic-ai-slim[groq,openai,anthropic,bedrock]>=1.0",
+    "pydantic-ai-slim[anthropic,bedrock,google,groq,openai]>=1.0",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
     "httpx>=0.27",
     "tenacity>=9.0",
     "structlog>=24.1",
+    "valkey[asyncio]>=6.1.1",
 ]
 
 [dependency-groups]
@@ -59,6 +60,7 @@ warn_required_dynamic_aliases = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--ignore=tests/test_integration.py"
 
 [tool.coverage.run]
 source = ["core", "memory", "models", "config", "briefings"]

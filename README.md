@@ -4,13 +4,16 @@ AtlasMind-Netra-mcp is the AI agent and MCP server layer of the AtlasMind platfo
 
 Jira queries written by an LLM routinely fail or return wrong results because natural language is ambiguous - "escalation" could be a label, a custom field, or a priority value; "today" could mean created, updated, or due today; "my team" has no JQL equivalent. This agent fixes that by detecting ambiguous terms, asking one targeted clarifying question using real field names from the live Jira instance, learning team conventions so the same question is never asked twice, and only calling `atlasMind-Lite` once the intent is fully resolved.
 
-Four MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_report`, and `get_jira_context`. Everything else - the clarification loop, session store, intent classifier, and conventions store - is internal. Milestones 1 and 2 are complete: `query_jira` is fully wired; the analysis engine (`IssueAnalyser`, `RankingEngine`, `get_issue_details`) is implemented and tested but not yet exposed - that is Milestone 3 (`generate_briefing`). The other two tools return a typed not-implemented error naming their milestone.
+Four MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_report`, and `get_jira_context`. Everything else - the clarification loop, session store, intent classifier, and conventions store - is internal. All four tools are fully wired: `query_jira` runs the clarification-to-dispatch loop; `generate_briefing` decomposes a meeting agenda into topics, runs per-topic analysis, and returns a ranked, cited briefing; `get_report` fetches a stored briefing by ID; `get_jira_context` returns Jira instance metadata. The server is production-ready for cloud deployment (streamable-http with `stateless_http=True`, bounded in-memory cache, and an optional Valkey session store for horizontal scaling).
 
 ## Prerequisites
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- A [Groq API key](https://console.groq.com/keys) (default LLM backend for the clarifier)
+- An LLM API key - choose one:
+  - [Groq](https://console.groq.com/keys) (free tier, default): `GROQ_API_KEY`
+  - [Google AI Studio](https://aistudio.google.com/apikey) (free tier): `GOOGLE_API_KEY`
+  - Anthropic, AWS Bedrock, or any OpenAI-compatible endpoint (see [LLM providers](#llm-providers) below)
 - Optional for end-to-end runs: the atlasMind backend running on `http://localhost:8000`
 
 ## Setup
@@ -21,10 +24,32 @@ uv sync
 
 # configure environment
 copy .env.example .env
-# edit .env and set at least GROQ_API_KEY
+# edit .env: set your LLM API key (GROQ_API_KEY or GOOGLE_API_KEY) and NETRA_LLM__MODEL
 ```
 
-Every setting is overridable via `NETRA_*` environment variables; see `.env.example` for the full list (backend URL, session TTL, clarification limits, transport).
+Every setting is overridable via `NETRA_*` environment variables; see `.env.example` for the full list (backend URL, LLM model, session TTL, clarification limits, transport).
+
+## LLM providers
+
+The clarifier, agenda decomposer, and issue analyser all use the same LLM, configured with two env vars:
+
+| Provider | `NETRA_LLM__MODEL` | API key env var | Notes |
+|---|---|---|---|
+| Groq (default) | `groq:llama-3.3-70b-versatile` | `GROQ_API_KEY` | Free tier; fast |
+| Google Gemini | `google:gemini-2.0-flash` | `GOOGLE_API_KEY` | Free tier; get key at aistudio.google.com |
+| Google Gemini (alt) | `google:gemini-1.5-flash` | `GOOGLE_API_KEY` | Stable free-tier alternative |
+| Anthropic | `anthropic:claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` | Paid |
+| AWS Bedrock | `bedrock:anthropic.claude-sonnet-4-5` | AWS credential chain | IAM role or key pair |
+| OpenAI-compatible | `openai:<model-name>` | `NETRA_LLM__API_KEY` or `OPENAI_API_KEY` | Set `NETRA_LLM__BASE_URL` to the provider endpoint |
+
+Example `.env` for Google Gemini free tier:
+
+```
+NETRA_LLM__MODEL=google:gemini-2.0-flash
+GOOGLE_API_KEY=your_key_here
+```
+
+The provider is detected automatically from the model string prefix - no other code changes needed when switching.
 
 ## How to test the MCP server
 
@@ -62,11 +87,13 @@ Then in the inspector:
 4. With the atlasMind backend running you get JQL + issues back; without it you get a graceful `errors: ["backend unreachable after retries: ..."]` response, which still proves the clarification loop end-to-end.
 5. Repeat step 1 with a new `session_id` - no question this time: the convention was learned and persisted to `data/conventions.json`.
 
-The three stub tools (`generate_briefing`, `get_report`, `get_jira_context`) should return a not-implemented error naming their milestone.
+All four tools are live. Try `generate_briefing` with `agenda_text = "top blockers in project X, risks for carline Y"` and `session_id = "brief-1"` to see the full briefing pipeline.
 
 ### 3. Testing from Claude Desktop (stdio)
 
-Add this to `claude_desktop_config.json` (Settings -> Developer -> Edit Config):
+Add this to `claude_desktop_config.json` (Settings -> Developer -> Edit Config).
+
+With Groq (default):
 
 ```json
 {
@@ -82,6 +109,29 @@ Add this to `claude_desktop_config.json` (Settings -> Developer -> Edit Config):
       ],
       "env": {
         "GROQ_API_KEY": "gsk_..."
+      }
+    }
+  }
+}
+```
+
+With Google Gemini free tier (alternative):
+
+```json
+{
+  "mcpServers": {
+    "atlasmind-netra": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "\\path\\to\\AtlasMind-Netra-mcp",
+        "run",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "NETRA_LLM__MODEL": "google:gemini-2.0-flash",
+        "GOOGLE_API_KEY": "AIza..."
       }
     }
   }
@@ -171,6 +221,28 @@ Every dispatched `query_jira` call (successful or failed at the backend) also wr
 - Disable with `NETRA_DELIVERY__ENABLED=false`; change the folder with `NETRA_DELIVERY__OUTPUT_DIR`.
 - Delivery is best-effort: a failed write never fails the query (a note appears in `errors`).
 - The markdown file channel is the first `BaseDeliveryChannel` implementation (`briefings/delivery.py`); Teams/Slack/email/Confluence channels plug in as subclasses with Milestone 3.
+
+## Shared session store (Valkey)
+
+By default the server uses an in-process TTL dict for session state (`NETRA_SERVER__SESSION_BACKEND=memory`). This works for single-instance deployments. For horizontal scaling - multiple server instances behind a load balancer - sessions must be shared, otherwise a clarification turn can land on a different instance than the one that started the session.
+
+Netra-mcp supports [Valkey](https://valkey.io) (BSD 3-Clause, the Linux Foundation fork of Redis) as a shared session backend. It is wire-compatible with Redis but has no licence restrictions.
+
+Install the client:
+
+```powershell
+uv add "valkey[asyncio]" --native-tls
+```
+
+Activate in `.env`:
+
+```
+NETRA_SERVER__SESSION_BACKEND=valkey
+NETRA_VALKEY__URL=redis://localhost:6379/0
+# NETRA_VALKEY__PASSWORD=<secret>   # optional
+```
+
+Session keys are prefixed `netra:session:` and `netra:briefing:`. TTL is refreshed on every write. Connection errors propagate immediately - they are never swallowed silently.
 
 ## Logging and log viewing
 

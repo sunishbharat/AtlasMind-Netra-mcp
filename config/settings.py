@@ -56,6 +56,11 @@ class LiteSettings(BaseModel):
     )
     query_path: str = Field(default="/query", description="Query endpoint path.")
     health_path: str = Field(default="/health", description="Health endpoint path.")
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="Backend API key for X-API-Key auth. Never logged. Set via "
+        "NETRA_LITE__API_KEY env var when the backend has NETRA_API_KEY configured.",
+    )
     timeout_seconds: float = Field(
         default=300.0,
         description="HTTP timeout for backend calls. Generous: the backend runs an LLM "
@@ -171,6 +176,12 @@ class AnalysisSettings(BaseModel):
         default=Path("config/ranking_default.json"),
         description="Path to the ranking weights JSON file.",
     )
+    analysis_cache_max_size: int = Field(
+        default=1000,
+        description="Max entries in the IssueAnalyser in-process result cache. "
+        "Oldest entry evicted when the limit is reached (FIFO). "
+        "Set to 0 to disable caching. Override with NETRA_ANALYSIS__ANALYSIS_CACHE_MAX_SIZE.",
+    )
 
 
 class BriefingSettings(BaseModel):
@@ -223,6 +234,20 @@ class DeliverySettings(BaseModel):
     )
 
 
+class ValkeySettings(BaseModel):
+    """Valkey connection settings (BSD 3-Clause; replaces Redis which is SSPL-licensed)."""
+
+    url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Valkey server URL. valkey-py accepts redis:// and valkey:// schemes. "
+        "Override with NETRA_VALKEY__URL.",
+    )
+    password: SecretStr | None = Field(
+        default=None,
+        description="Valkey AUTH password. Never logged. Override with NETRA_VALKEY__PASSWORD.",
+    )
+
+
 class ServerSettings(BaseModel):
     """MCP transport configuration."""
 
@@ -231,6 +256,12 @@ class ServerSettings(BaseModel):
     )
     host: str = Field(default="127.0.0.1", description="Bind host for streamable-http.")
     port: int = Field(default=8765, description="Bind port for streamable-http.")
+    session_backend: Literal["memory", "valkey"] = Field(
+        default="memory",
+        description="Session store backend. 'memory' = in-process TTL dict (single instance only); "
+        "'valkey' = shared Valkey store (required for horizontal scaling). "
+        "Override with NETRA_SERVER__SESSION_BACKEND.",
+    )
 
 
 class LogSettings(BaseModel):
@@ -266,4 +297,5 @@ class Settings(BaseSettings):
     briefing: BriefingSettings = Field(default_factory=BriefingSettings)
     delivery: DeliverySettings = Field(default_factory=DeliverySettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
+    valkey: ValkeySettings = Field(default_factory=ValkeySettings)
     log: LogSettings = Field(default_factory=LogSettings)

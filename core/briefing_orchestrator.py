@@ -207,7 +207,14 @@ class BriefingOrchestrator:
         """Read a stored briefing report by ID. Returns sections from the JSON sidecar.
 
         session_id is accepted now for M4 ACL enforcement (ownership check); currently unused.
+
+        Raises:
+            ValueError: if report_id contains path traversal or other unsafe characters.
         """
+        # Validate report_id to prevent path traversal attacks (C-1)
+        if not _is_safe_report_id(report_id):
+            raise ValueError(f"report_id contains unsafe characters: {report_id!r}")
+
         log = logger.bind(report_id=report_id, session_id=session_id)
         json_path = self._settings.delivery.output_dir / f"{report_id}.json"
         md_path = self._settings.delivery.output_dir / f"{report_id}.md"
@@ -354,3 +361,21 @@ async def _store_briefing_json(path: Path, report_id: str, sections: list[Briefi
 def _make_report_id(session_id: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_-]", "-", session_id)[:40]
     return f"briefing_{datetime.now(UTC):%Y%m%d_%H%M%S}_{slug}_{uuid4().hex[:8]}"
+
+
+_REPORT_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_-]{0,127}$")
+
+
+def _is_safe_report_id(report_id: str) -> bool:
+    """Return True if report_id is safe for use in file paths (no traversal, etc.).
+
+    A safe report_id matches the pattern: alphanumeric + dash/underscore, up to 128 chars.
+    Generated report_ids (via _make_report_id) never contain dots, so any . character
+    is a traversal attempt.
+    """
+    if not report_id or len(report_id) > 128:
+        return False
+    # Reject any report_id with path separators or traversal attempts
+    if "/" in report_id or "\\" in report_id or ".." in report_id:
+        return False
+    return _REPORT_ID_RE.match(report_id) is not None

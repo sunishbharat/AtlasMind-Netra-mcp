@@ -37,7 +37,7 @@ class MarkdownFileDeliveryChannel(BaseDeliveryChannel):
         logger.debug("report_writing", report_id=report_id, path=str(path))
         try:
             await asyncio.to_thread(self._write, path, content)
-        except Exception as exc:
+        except OSError as exc:
             logger.error("report_write_failed", report_id=report_id, path=str(path), error=str(exc))
             raise
         logger.debug("report_written", report_id=report_id, path=str(path))

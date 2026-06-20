@@ -56,12 +56,14 @@ class IssueAnalyser:
         max_concurrency: int = 5,
         blocked_statuses: frozenset[str] | None = None,
         today: datetime.date | None = None,
+        cache_max_size: int = 1000,
     ) -> None:
         self._agent = agent
         self._max_concurrency = max_concurrency
         self._blocked_statuses = blocked_statuses or _DEFAULT_BLOCKED_STATUSES
         self._today = today
         self._cache: dict[tuple[str, str], BlockerAnalysis] = {}
+        self._cache_max_size = cache_max_size
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def analyse(
@@ -118,7 +120,10 @@ class IssueAnalyser:
             return self._cache[cache_key]
 
         result = await self._analyse_one(issue, summaries)
-        self._cache[cache_key] = result
+        if self._cache_max_size > 0:
+            if len(self._cache) >= self._cache_max_size:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[cache_key] = result
         return result
 
     async def _analyse_one(
@@ -184,6 +189,7 @@ def build_issue_analyser(
         agent=agent,
         max_concurrency=settings.max_concurrency,
         blocked_statuses=frozenset(s.strip().lower() for s in settings.blocked_statuses),
+        cache_max_size=settings.analysis_cache_max_size,
     )
 
 

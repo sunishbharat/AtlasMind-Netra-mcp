@@ -56,6 +56,16 @@ class AtlasMindLiteClient:
             return False
         return response.status_code == 200
 
+    def _build_headers(self, **extra: str | None) -> dict[str, str]:
+        """Build request headers including X-API-Key (when configured) and any extras."""
+        headers: dict[str, str] = {}
+        if self._settings.api_key:
+            headers["X-API-Key"] = self._settings.api_key.get_secret_value()
+        for name, value in extra.items():
+            if value:
+                headers[name] = value
+        return headers
+
     async def query(
         self,
         text: str,
@@ -76,15 +86,13 @@ class AtlasMindLiteClient:
             request_id=str(uuid4()),
             limit=limit if limit is not None else self._settings.default_limit,
         )
-        headers = {
-            name: value
-            for name, value in (
-                ("X-Jira-Token", jira_token),
-                ("X-Jira-Email", jira_email),
-                ("X-Jira-Url", jira_url),
-            )
-            if value
-        }
+        headers = self._build_headers(
+            **{
+                "X-Jira-Token": jira_token,
+                "X-Jira-Email": jira_email,
+                "X-Jira-Url": jira_url,
+            }
+        )
         try:
             response = await self._post_with_retry(
                 self._settings.query_path, request.model_dump(exclude_none=True), headers
@@ -156,7 +164,7 @@ class AtlasMindLiteClient:
             response = await self._post_with_retry(
                 self._settings.issue_details_path,
                 request.model_dump(exclude_none=True),
-                {},
+                self._build_headers(),
             )
         except (httpx.HTTPError, _ServiceUnavailableError) as exc:
             raise LiteBackendError(f"backend unreachable after retries: {exc}") from exc

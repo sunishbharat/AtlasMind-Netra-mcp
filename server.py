@@ -28,9 +28,10 @@ from core.orchestrator import ElicitFn, Orchestrator, QueryHandler
 from core.ranking_engine import RankingEngine, load_ranking_rule
 from core.report_synthesiser import ReportSynthesiser
 from core.vocab_lookup import VocabLookup
-from memory.briefing_session_store import InMemoryBriefingSessionStore
+from memory.briefing_session_store import BaseBriefingSessionStore, InMemoryBriefingSessionStore
 from memory.conventions_store import JsonFileConventionsStore
-from memory.session_store import InMemorySessionStore
+from memory.session_store import BaseSessionStore, InMemorySessionStore
+from memory.store_factory import create_briefing_session_store, create_session_store
 from models.responses import (
     BriefingResponse,
     JiraContextResponse,
@@ -84,6 +85,7 @@ def configure_logging(settings: LogSettings) -> None:
 def build_orchestrator(
     settings: Settings,
     llm_model: Model | str | None = None,
+    session_store: BaseSessionStore | None = None,
 ) -> tuple[Orchestrator, AtlasMindLiteClient]:
     """Wire the query_jira object graph from settings.
 
@@ -91,6 +93,8 @@ def build_orchestrator(
     the briefing pipeline (avoids a second connection pool to the same backend).
     Accepts an optional pre-built llm_model to avoid a second provider instantiation when
     both orchestrators are created together in create_server.
+    Accepts an optional session_store so create_server can inject the configured backend;
+    falls back to InMemorySessionStore when called directly (e.g. from tests).
     """
     vocab = VocabLookup(settings.clarification.vocab_path)
     http = httpx.AsyncClient(
@@ -104,7 +108,8 @@ def build_orchestrator(
     lite_client = AtlasMindLiteClient(http, settings.lite)
     _model = llm_model if llm_model is not None else create_llm_provider(settings.llm).make_model()
     return Orchestrator(
-        session_store=InMemorySessionStore(ttl_seconds=settings.session.ttl_seconds),
+        session_store=session_store
+        or InMemorySessionStore(ttl_seconds=settings.session.ttl_seconds),
         conventions_store=JsonFileConventionsStore(settings.clarification.conventions_path),
         intent_classifier=IntentClassifier(vocab),
         clarifier=Clarifier(
@@ -130,12 +135,15 @@ def build_briefing_orchestrator(
     query_handler: QueryHandler,
     lite_client: AtlasMindLiteClient | None = None,
     llm_model: Model | str | None = None,
+    briefing_session_store: BaseBriefingSessionStore | None = None,
 ) -> BriefingOrchestrator:
     """Wire the generate_briefing object graph from settings.
 
     Accepts a shared lite_client to avoid opening a second connection pool to the same backend.
     Accepts an optional pre-built llm_model to avoid a second provider instantiation when
     both orchestrators are created together in create_server.
+    Accepts an optional briefing_session_store so create_server can inject the configured
+    backend; falls back to InMemoryBriefingSessionStore when called directly (e.g. tests).
     """
     if lite_client is None:
         http = httpx.AsyncClient(
@@ -160,7 +168,8 @@ def build_briefing_orchestrator(
         ranking_engine=RankingEngine(rule),
         report_synthesiser=ReportSynthesiser(max_issues=settings.delivery.max_issues),
         delivery_channel=build_delivery_channel(settings.delivery),
-        briefing_sessions=InMemoryBriefingSessionStore(ttl_seconds=settings.session.ttl_seconds),
+        briefing_sessions=briefing_session_store
+        or InMemoryBriefingSessionStore(ttl_seconds=settings.session.ttl_seconds),
         settings=settings,
     )
 
@@ -208,11 +217,19 @@ def create_server(
         _provider.validate_credentials()
         shared_llm = _provider.make_model()
     if orchestrator is None:
-        orch, shared_lite = build_orchestrator(settings, llm_model=shared_llm)
+        orch, shared_lite = build_orchestrator(
+            settings,
+            llm_model=shared_llm,
+            session_store=create_session_store(settings),
+        )
     else:
         orch = orchestrator
     briefing_orch = briefing_orchestrator or build_briefing_orchestrator(
-        settings, orch, shared_lite, llm_model=shared_llm
+        settings,
+        orch,
+        shared_lite,
+        llm_model=shared_llm,
+        briefing_session_store=create_briefing_session_store(settings),
     )
     mcp: FastMCP = FastMCP(name="AtlasMind-Netra-mcp")
 
@@ -295,14 +312,21 @@ def create_server(
         Rendering and export (PNG/PDF/clipboard) happen in AtlasMind-frontendUI at the
         view_url - this tool never returns rendered binaries.
         """
-        return await briefing_orch.get_briefing_report(report_id, session_id)
+        try:
+            return await briefing_orch.get_briefing_report(report_id, session_id)
+        except ValueError as exc:
+            # C-1: report_id validation failed (path traversal attempt)
+            return ReportResponse(
+                report_id=report_id,
+                errors=[f"invalid report_id: {exc}"],
+            )
 
     @mcp.tool
     async def get_jira_context(
         include_fields: bool = True, include_projects: bool = True
     ) -> JiraContextResponse:
         """Jira instance metadata: projects, fields, priorities, issue types."""
-        raise ToolError("get_jira_context is not yet implemented.")
+        raise ToolError("get_jira_context is not implemented.")
 
     return mcp
 
@@ -349,7 +373,12 @@ def main() -> None:
     )
     server = create_server(settings)
     if settings.server.transport == "streamable-http":
-        server.run(transport="http", host=settings.server.host, port=settings.server.port)
+        server.run(
+            transport="http",
+            host=settings.server.host,
+            port=settings.server.port,
+            stateless_http=True,
+        )
     else:
         server.run()  # stdio (development default)
 

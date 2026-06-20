@@ -142,6 +142,27 @@ class BedrockLLMProvider(LLMProvider):
             )
 
 
+class GoogleGeminiLLMProvider(LLMProvider):
+    """Google Gemini provider via PydanticAI's google (AI Studio) support.
+
+    Reads GOOGLE_API_KEY from the environment. Use model strings of the form
+    'google:gemini-2.0-flash' or 'google-vertex:<model>' for Vertex AI.
+    Free-tier models: gemini-2.0-flash, gemini-1.5-flash.
+    """
+
+    def __init__(self, model_str: str) -> None:
+        self._model_str = model_str
+
+    def make_model(self) -> str:
+        return self._model_str
+
+    def validate_credentials(self) -> None:
+        if not os.environ.get("GOOGLE_API_KEY"):
+            raise LLMProviderError(
+                f"GOOGLE_API_KEY is not set (required for model '{self._model_str}')"
+            )
+
+
 class _UnknownLLMProvider(LLMProvider):
     """Passthrough for unrecognised model string prefixes.
 
@@ -163,11 +184,13 @@ def create_llm_provider(settings: LLMSettings) -> LLMProvider:
     """Factory: inspect the model string prefix and return the matching LLMProvider.
 
     Routing:
-      groq:*      -> GroqLLMProvider            (GROQ_API_KEY)
-      anthropic:* -> AnthropicLLMProvider       (ANTHROPIC_API_KEY)
-      openai:*    -> OpenAICompatibleLLMProvider (NETRA_LLM__BASE_URL + API key)
-      bedrock:*   -> BedrockLLMProvider         (AWS credential chain / bearer token)
-      <other>     -> _UnknownLLMProvider        (passthrough, no credential check)
+      groq:*          -> GroqLLMProvider            (GROQ_API_KEY)
+      anthropic:*     -> AnthropicLLMProvider       (ANTHROPIC_API_KEY)
+      openai:*        -> OpenAICompatibleLLMProvider (NETRA_LLM__BASE_URL + API key)
+      bedrock:*       -> BedrockLLMProvider         (AWS credential chain / bearer token)
+      google:*        -> GoogleGeminiLLMProvider    (GOOGLE_API_KEY, AI Studio free tier)
+      google-vertex:* -> GoogleGeminiLLMProvider    (GOOGLE_API_KEY or ADC, Vertex AI)
+      <other>         -> _UnknownLLMProvider        (passthrough, no credential check)
     """
     model_str = settings.model
 
@@ -188,5 +211,7 @@ def create_llm_provider(settings: LLMSettings) -> LLMProvider:
         )
     if prefix == "bedrock":
         return BedrockLLMProvider(model_name=model_name, endpoint_url=settings.base_url or None)
+    if prefix in ("google", "google-vertex"):
+        return GoogleGeminiLLMProvider(model_str)
 
     return _UnknownLLMProvider(model_str)

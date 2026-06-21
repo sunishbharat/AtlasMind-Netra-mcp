@@ -13,3 +13,6 @@ applications:
       NETRA_SERVER__HOST: "0.0.0.0"
       NETRA_LOG__JSON_LOGS: "true"
       NETRA_ANALYSIS__MAX_CONCURRENCY: "1"
+      # Jira metadata served from a CF static-file app (cf push netra-fields-server ...)
+      # NETRA_CLARIFICATION__JIRA_FIELDS_URL: https://FIELDS_SERVER_ROUTE/jira_fields.json
+      # NETRA_CLARIFICATION__ALLOWED_VALUES_URL: https://FIELDS_SERVER_ROUTE/jira_allowed_values.json

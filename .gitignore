@@ -19,3 +19,6 @@ htmlcov/
 
 # Runtime data (learned conventions, caches)
 data/
+
+# CF static-file server directory (generated locally; not committed)
+netra-fields-server/

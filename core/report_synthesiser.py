@@ -8,7 +8,11 @@ labelled explicitly; applied interpretations are listed so wrong assumptions are
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
+
 from models.responses import BlockerAnalysis, BriefingSection, QueryResponse
+
+log = structlog.get_logger(__name__)
 
 _MAX_DEFAULT_COLUMNS = 8
 
@@ -160,6 +164,7 @@ class ReportSynthesiser:
 
     def _issues_table(self, response: QueryResponse) -> list[str]:
         columns = response.display_fields or _default_columns(response.issues[0])
+        log.debug("issues_table", columns=columns, first_issue=response.issues[0])
         table = [
             "| " + " | ".join(_cell(c) for c in columns) + " |",
             "|" + "---|" * len(columns),
@@ -179,11 +184,22 @@ def _default_columns(issue: dict[str, Any]) -> list[str]:
 
 
 def _issue_value(issue: dict[str, Any], column: str) -> str:
-    """Map a display column to an issue value (contract: lowercased, underscored)."""
-    for candidate in (column, column.lower(), column.lower().replace(" ", "_")):
+    """Return the issue value for the given display column.
+
+    Tries three forms of the backend-provided column name - no new names are invented:
+      1. Exact string from display_fields     ("Issue Type", "Key", "Resolved")
+      2. Lowercased                           ("issue type", "key", "resolved")
+      3. Lowercased with spaces removed       ("issuetype",  "key", "resolved")
+    A null value at an earlier candidate does not block a non-null value at a later one.
+    The backend sends both "Key": null and "key": "PROJ-123" in the same issue dict;
+    skipping nulls ensures the real value in the lowercase form is found.
+    """
+    lower = column.lower()
+    for candidate in (column, lower, lower.replace(" ", "")):
         if candidate in issue:
             v = issue[candidate]
-            return str(v) if v is not None else ""
+            if v is not None:
+                return str(v)
     return ""
 
 

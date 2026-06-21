@@ -138,6 +138,14 @@ class ClarificationSettings(BaseModel):
         default=None,
         description="Path to the backend's cached jira_allowed_values.json; optional.",
     )
+    jira_fields_url: str | None = Field(
+        default=None,
+        description="HTTP URL for jira_fields.json (CF static-file app); takes effect only when jira_fields_path is unset.",
+    )
+    allowed_values_url: str | None = Field(
+        default=None,
+        description="HTTP URL for jira_allowed_values.json (CF static-file app); takes effect only when allowed_values_path is unset.",
+    )
     max_rounds: int = Field(
         default=3,
         description="Max clarification rounds per session before dispatching with a warning.",

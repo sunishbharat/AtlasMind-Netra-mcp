@@ -394,9 +394,34 @@ def _resolve_relative_paths(settings: Settings) -> None:
             setattr(ana, attr, root / p)
 
 
+def _fetch_fields_files(settings: Settings) -> None:
+    """Download Jira metadata files from CF static-file URLs to /tmp/ at startup.
+
+    Only runs when the corresponding *_PATH is unset and a *_URL is provided.
+    Failures are non-fatal: JiraFieldsLoader degrades gracefully to an empty list.
+    """
+    clr = settings.clarification
+    targets = [
+        (clr.jira_fields_url, clr.jira_fields_path, "jira_fields.json", "jira_fields_path"),
+        (clr.allowed_values_url, clr.allowed_values_path, "jira_allowed_values.json", "allowed_values_path"),
+    ]
+    for url, existing_path, filename, attr in targets:
+        if url and existing_path is None:
+            dest = Path("/tmp") / filename
+            try:
+                resp = httpx.get(url, timeout=15)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+                setattr(clr, attr, dest)
+                logger.info("jira_fields_fetched", url=url, dest=str(dest))
+            except httpx.HTTPError as exc:
+                logger.warning("jira_fields_fetch_failed", url=url, error=str(exc))
+
+
 def main() -> None:
     settings = Settings()
     _resolve_relative_paths(settings)
+    _fetch_fields_files(settings)
     configure_logging(settings.log)
     logger.info(
         "server_starting",

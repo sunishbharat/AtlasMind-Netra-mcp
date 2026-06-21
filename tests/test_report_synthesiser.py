@@ -12,7 +12,7 @@ def make_response(**overrides: object) -> QueryResponse:
         "answer": "Found 2 result(s).",
         "total": 2,
         "shown": 2,
-        "display_fields": ["Key", "Summary", "Status"],
+        "display_fields": ["key", "summary", "status"],
         "issues": [
             {"key": "CAR-1", "summary": "Brake ECU blocked", "status": "Blocked"},
             {"key": "CAR-2", "summary": "Firmware | v2 regression", "status": "Open"},
@@ -79,3 +79,57 @@ def test_default_columns_when_display_fields_missing() -> None:
     response = make_response(display_fields=[])
     report = ReportSynthesiser().build_query_report(query="q", response=response)
     assert "| key | summary | status |" in report
+
+
+def test_key_null_twin_is_skipped() -> None:
+    """Backend sends "Key": null alongside "key": value; the null must be skipped.
+
+    Production data shape: display_fields has "Key"; issue dict has
+    "key": "PROJ-1" (real value) and "Key": null (backend adds title-case form as null).
+    The null "Key" (candidate 1) must not prevent "key" (candidate 2) from returning.
+    """
+    response = make_response(
+        display_fields=["Key", "Summary"],
+        issues=[{"key": "PROJ-1", "Key": None, "summary": "Some issue", "status": "Open"}],
+        total=1,
+        shown=1,
+    )
+    report = ReportSynthesiser().build_query_report(query="q", response=response)
+    assert "| PROJ-1 |" in report
+
+
+def test_real_backend_column_shapes() -> None:
+    """Reflect actual backend response shape from production (ZooKeeper blockers query).
+
+    Confirmed field names from live debug log (2026-06-21):
+      - "key": "ZOOKEEPER-4923"             (lowercase, real value)
+      - "Key": null                          (title-case, explicitly null - backend adds it)
+      - "issuetype": "New Feature"           (no space; display_fields says "Issue Type")
+      - "resolutiondate": "2025-12-15..."    (Jira field; display_fields says "Resolved")
+
+    Note: "Resolved" column stays empty because "resolutiondate" cannot be derived from
+    "Resolved" by case/space normalization. That is a backend data contract gap.
+    """
+    issue = {
+        "key": "ZOOKEEPER-4923",
+        "Key": None,
+        "summary": "Support individual timeout to establish a brand-new session",
+        "assignee": "Kezhu Wang",
+        "status": "Resolved",
+        "Status": "Resolved",
+        "priority": "Blocker",
+        "Priority": "Blocker",
+        "issuetype": "New Feature",
+        "created": "2025-04-25T16:23:27.000+0000",
+        "resolutiondate": "2025-12-15T22:39:44.000+0000",
+        "Project": "ZooKeeper",
+    }
+    response = make_response(
+        display_fields=["Key", "Summary", "Assignee", "Status", "Issue Type", "Resolved"],
+        issues=[issue],
+        total=1,
+        shown=1,
+    )
+    report = ReportSynthesiser().build_query_report(query="q", response=response)
+    assert "| ZOOKEEPER-4923 |" in report    # Key: null "Key" skipped, lowercase "key" used
+    assert "| New Feature |" in report        # Issue Type: space-stripped -> issuetype

@@ -344,6 +344,45 @@ export REGISTRY=ghcr.io/sunishbharat
 
 `--push` is mandatory for multi-platform builds; `--load` only works for single-arch images. OCI-only users can stop after the `docker buildx build` step - `cf push` at the end requires an active CF session and will fail without one.
 
+### Cloud Foundry manifest
+
+`manifest.yml.template` is the CF application descriptor. `cf-deploy.sh` substitutes the `DOCKER_IMAGE_TAG` placeholder with the actual image reference at deploy time and passes the result to `cf push` - you never edit the template for routine deploys.
+
+If you need to inspect or customise the manifest before pushing - for example to scale instances or change memory - generate it manually:
+
+```bash
+export REGISTRY=ghcr.io/sunishbharat
+GIT_SHA=$(git rev-parse --short HEAD)
+IMAGE="${REGISTRY}/atlasmind-netra-mcp:${GIT_SHA}"
+sed "s|DOCKER_IMAGE_TAG|${IMAGE}|g" manifest.yml.template > manifest.yml
+# review or edit manifest.yml, then:
+cf push atlasmind-netra-mcp -f manifest.yml
+```
+
+To deploy a specific CI-built release tag instead of the local SHA:
+
+```bash
+sed "s|DOCKER_IMAGE_TAG|ghcr.io/sunishbharat/atlasmind-netra-mcp:0.1.0|g" \
+  manifest.yml.template > manifest.yml
+cf push atlasmind-netra-mcp -f manifest.yml
+```
+
+Default resource settings in the template (edit `manifest.yml.template` to change permanently):
+
+| Setting | Default | Notes |
+|---|---|---|
+| `memory` | `512M` | Increase if the server process grows under sustained load |
+| `disk_quota` | `512M` | Covers Python env + log files |
+| `instances` | `1` | Scale up only with `NETRA_SERVER__SESSION_BACKEND=valkey` - in-memory sessions do not survive across instances |
+| `health-check-http-endpoint` | `/health` | Do not change - CF will not route traffic until this returns 200 |
+
+The two Jira metadata URL lines in the template are commented out. Uncomment them when the static-file server (`netra-fields-server`) is deployed and set its route:
+
+```yaml
+NETRA_CLARIFICATION__JIRA_FIELDS_URL: https://<fields-server-route>/jira_fields.json
+NETRA_CLARIFICATION__ALLOWED_VALUES_URL: https://<fields-server-route>/jira_allowed_values.json
+```
+
 ### Required environment variables in CF / OCI
 
 | Variable | Description |
@@ -373,57 +412,3 @@ Set secrets with `cf set-env atlasmind-netra-mcp <VAR> <value>` followed by `cf 
 ```
 
 Omit `headers` if `NETRA_SERVER__API_KEY` is not set.
-
-## Shared session store (Valkey)
-
-By default the server uses an in-process TTL dict for session state (`NETRA_SERVER__SESSION_BACKEND=memory`). This works for single-instance deployments. For horizontal scaling - multiple server instances behind a load balancer - sessions must be shared, otherwise a clarification turn can land on a different instance than the one that started the session.
-
-Netra-mcp supports [Valkey](https://valkey.io) (BSD 3-Clause, the Linux Foundation fork of Redis) as a shared session backend. It is wire-compatible with Redis but has no licence restrictions.
-
-Install the client:
-
-```powershell
-uv add "valkey[asyncio]" --native-tls
-```
-
-Activate in `.env`:
-
-```
-NETRA_SERVER__SESSION_BACKEND=valkey
-NETRA_VALKEY__URL=redis://localhost:6379/0
-# NETRA_VALKEY__PASSWORD=<secret>   # optional
-```
-
-Session keys are prefixed `netra:session:` and `netra:briefing:`. TTL is refreshed on every write. Connection errors propagate immediately - they are never swallowed silently.
-
-## Logging and log viewing
-
-### Log file
-
-Every server run appends structured JSON lines to `data/logs/netra.log` (created automatically on first start). The file persists across restarts and can be opened in any text editor - each line is one JSON object with `timestamp`, `level`, `event`, and context fields.
-
-Key events to look for:
-
-| event | meaning |
-|---|---|
-| `report_writing` | delivery channel is about to write a report; `path` field shows the exact file location |
-| `report_written` | report file written successfully |
-| `report_write_failed` | write failed; `error` field has the reason |
-| `report_skipped` | delivery is disabled (`NETRA_DELIVERY__ENABLED=false`) |
-| `report_delivery_failed` | orchestrator caught a delivery error; query still succeeded |
-
-To disable the log file set `NETRA_LOG__LOG_FILE=` (empty string) in `.env`. To change the path set `NETRA_LOG__LOG_FILE=data/logs/custom.log`.
-
-### Real-time log streaming
-
-To watch logs live while a test is running, open a second PowerShell window and run:
-
-```powershell
-Get-Content -Wait -Tail 20 "data\logs\netra.log"
-```
-
-New lines appear as they are written - equivalent to `tail -f` on Linux. Press `Ctrl+C` to stop.
-
-### Log format
-
-Console output is human-readable in dev mode and JSON when `NETRA_LOG__JSON_LOGS=true`. The log file is always JSON regardless of that setting, so it remains machine-readable even during local development. stdlib logs from httpx, asyncio, and other libraries are routed through the same pipeline and appear in both outputs.

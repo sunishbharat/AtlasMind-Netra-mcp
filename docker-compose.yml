@@ -1,0 +1,21 @@
+services:
+  netra-mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    environment:
+      - NETRA_SERVER__TRANSPORT=streamable-http
+      - NETRA_SERVER__HOST=0.0.0.0
+      - NETRA_SERVER__PORT=8765
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

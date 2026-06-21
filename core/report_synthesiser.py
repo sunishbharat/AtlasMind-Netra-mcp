@@ -178,11 +178,12 @@ def _default_columns(issue: dict[str, Any]) -> list[str]:
     return list(issue)[:_MAX_DEFAULT_COLUMNS]
 
 
-def _issue_value(issue: dict[str, Any], column: str) -> object:
-    """Map a display column to an issue key (contract: lowercased, underscored)."""
+def _issue_value(issue: dict[str, Any], column: str) -> str:
+    """Map a display column to an issue value (contract: lowercased, underscored)."""
     for candidate in (column, column.lower(), column.lower().replace(" ", "_")):
         if candidate in issue:
-            return issue[candidate]
+            v = issue[candidate]
+            return str(v) if v is not None else ""
     return ""
 
 
@@ -212,4 +213,6 @@ def _issue_detail_lines(issue: BlockerAnalysis) -> list[str]:
 
 def _cell(value: object) -> str:
     """One markdown table cell: single line, pipes escaped."""
+    if value is None:
+        return ""
     return str(value).replace("\r", " ").replace("\n", " ").replace("|", "\\|")

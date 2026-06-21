@@ -9,7 +9,7 @@ environment variable with the ``NETRA_`` prefix and ``__`` as nested delimiter, 
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INSTANCE_DEFAULT_PROJECT = "_default"
@@ -262,6 +262,15 @@ class ServerSettings(BaseModel):
         "'valkey' = shared Valkey store (required for horizontal scaling). "
         "Override with NETRA_SERVER__SESSION_BACKEND.",
     )
+    public_url: str | None = Field(
+        default=None,
+        description=(
+            "Public base URL of this server, e.g. https://netra.atlasmind.de. "
+            "Used to construct view_url links returned in tool responses. "
+            "Leave unset for local dev (view_url will be absent from responses). "
+            "Override with NETRA_SERVER__PUBLIC_URL."
+        ),
+    )
 
 
 class LogSettings(BaseModel):
@@ -275,6 +284,13 @@ class LogSettings(BaseModel):
         default=Path("data/logs/netra.log"),
         description="Append JSON log lines to this file. Set to empty string to disable.",
     )
+
+    @field_validator("log_file", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class Settings(BaseSettings):

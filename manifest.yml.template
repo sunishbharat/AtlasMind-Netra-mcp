@@ -1,0 +1,15 @@
+applications:
+  - name: atlasmind-netra-mcp
+    docker:
+      image: DOCKER_IMAGE_TAG
+    memory: 512M
+    disk_quota: 512M
+    instances: 1
+    health-check-type: http
+    health-check-http-endpoint: /health
+    health-check-invocation-timeout: 60
+    env:
+      NETRA_SERVER__TRANSPORT: streamable-http
+      NETRA_SERVER__HOST: "0.0.0.0"
+      NETRA_LOG__JSON_LOGS: "true"
+      NETRA_ANALYSIS__MAX_CONCURRENCY: "1"

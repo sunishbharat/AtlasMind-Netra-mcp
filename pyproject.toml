@@ -14,6 +14,8 @@ dependencies = [
     "tenacity>=9.0",
     "structlog>=24.1",
     "valkey[asyncio]>=6.1.1",
+    "markdown>=3.10.2",
+    "types-markdown>=3.10.2.20260518",
 ]
 
 [dependency-groups]

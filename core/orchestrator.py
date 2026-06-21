@@ -22,6 +22,7 @@ from config.settings import INSTANCE_DEFAULT_PROJECT, Settings
 from core.exceptions import ClarificationError, LiteBackendError, NetraError
 from core.intent_classifier import IntentClassifier
 from core.jira_fields_loader import JiraFieldsLoader
+from core.report_renderer import ReportRenderer
 from core.report_synthesiser import ReportSynthesiser
 from core.vocab_lookup import VocabLookup
 from memory.conventions_store import BaseConventionsStore, Convention
@@ -127,6 +128,7 @@ class Orchestrator:
         report_synthesiser: ReportSynthesiser,
         delivery_channel: BaseDeliveryChannel,
         settings: Settings,
+        renderer: ReportRenderer | None = None,
     ) -> None:
         self._sessions = session_store
         self._conventions = conventions_store
@@ -139,6 +141,7 @@ class Orchestrator:
         self._synthesiser = report_synthesiser
         self._delivery = delivery_channel
         self._settings = settings
+        self._renderer = renderer
 
     async def handle_query(
         self,
@@ -383,7 +386,8 @@ class Orchestrator:
                 update={"errors": [*response.errors, f"report not written: {exc}"]}
             )
         log.debug("report_written", location=location)
-        return response.model_copy(update={"report_path": location})
+        view_url = self._renderer.build_view_url(report_id) if self._renderer else None
+        return response.model_copy(update={"report_path": location, "view_url": view_url})
 
     @staticmethod
     def _question_response(session_id: str, question: str) -> QueryResponse:

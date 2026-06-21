@@ -34,8 +34,8 @@ class TestCreateSessionStore:
         assert isinstance(store, InMemorySessionStore)
         assert isinstance(store, BaseSessionStore)
 
-    @patch("memory.store_factory.ValkeySessionStore")
-    @patch("memory.store_factory.make_valkey_client")
+    @patch("memory.valkey_stores.ValkeySessionStore")
+    @patch("memory.valkey_stores.make_valkey_client")
     def test_valkey_backend_returns_valkey_store(
         self, mock_make_client: patch, mock_store_class: patch
     ) -> None:
@@ -62,8 +62,8 @@ class TestCreateBriefingSessionStore:
         assert isinstance(store, InMemoryBriefingSessionStore)
         assert isinstance(store, BaseBriefingSessionStore)
 
-    @patch("memory.store_factory.ValkeyBriefingSessionStore")
-    @patch("memory.store_factory.make_valkey_client")
+    @patch("memory.valkey_stores.ValkeyBriefingSessionStore")
+    @patch("memory.valkey_stores.make_valkey_client")
     def test_valkey_backend_returns_valkey_store(
         self, mock_make_client: patch, mock_store_class: patch
     ) -> None:

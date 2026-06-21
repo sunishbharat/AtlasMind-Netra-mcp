@@ -222,6 +222,93 @@ Every dispatched `query_jira` call (successful or failed at the backend) also wr
 - Delivery is best-effort: a failed write never fails the query (a note appears in `errors`).
 - The markdown file channel is the first `BaseDeliveryChannel` implementation (`briefings/delivery.py`); Teams/Slack/email/Confluence channels plug in as subclasses with Milestone 3.
 
+## Docker and cloud deployment
+
+The server ships as a self-contained Docker image. Valkey is bundled inside the container on loopback - no external Redis/Valkey service is required. Full runbook (CF, OCI A1, blue-green, nginx TLS): `docs/docker_cf_deployment.md`.
+
+### Local dev with docker-compose
+
+```bash
+# From repo root (never from docker/)
+docker-compose up
+curl http://localhost:8765/health   # {"status":"ok"}
+curl http://localhost:8765/mcp      # MCP endpoint
+```
+
+`./data` is mounted into the container so reports and learned conventions persist across restarts.
+
+### Build the image locally (single arch, fast)
+
+Requires Docker Desktop 4.x+ with buildx (shipped by default).
+
+```bash
+bash scripts/docker-build-local.sh
+```
+
+Detects your native architecture (`amd64` on Intel/AMD, `arm64` on Apple Silicon), builds with `--load` into the local daemon, and tags the image `ghcr.io/sunishbharat/atlasmind-netra-mcp:local`. Test it with:
+
+```bash
+docker run -p 8765:8765 --env-file .env \
+  ghcr.io/sunishbharat/atlasmind-netra-mcp:local
+curl http://localhost:8765/health
+```
+
+### Build and push multi-platform (amd64 + arm64)
+
+One-time buildx setup required before the first push:
+
+```bash
+docker buildx create --name multiarch --driver docker-container --use
+docker buildx inspect --bootstrap
+```
+
+If `docker buildx inspect --bootstrap` fails with "context canceled" (e.g. after a Docker Desktop restart), remove and recreate the builder:
+
+```bash
+docker buildx rm multiarch
+docker buildx create --name multiarch --driver docker-container --use
+docker buildx inspect --bootstrap
+```
+
+Then build and push (replace with your registry):
+
+```bash
+export REGISTRY=ghcr.io/sunishbharat
+./scripts/cf-deploy.sh   # builds both platforms, pushes to GHCR, then cf push
+```
+
+`--push` is mandatory for multi-platform builds; `--load` only works for single-arch images. OCI-only users can stop after the `docker buildx build` step - `cf push` at the end requires an active CF session and will fail without one.
+
+### Required environment variables in CF / OCI
+
+| Variable | Description |
+|----------|-------------|
+| `GROQ_API_KEY` | LLM API key (default provider) |
+| `NETRA_LITE__BASE_URL` | AtlasMind backend URL, e.g. `https://atlasmind.de` |
+| `NETRA_LITE__API_KEY` | X-API-Key for backend calls (recommended) |
+| `NETRA_SERVER__API_KEY` | X-API-Key to protect the MCP HTTP endpoint (recommended) |
+| `NETRA_SERVER__PUBLIC_URL` | Public URL of this server - enables `view_url` in tool responses |
+
+Set secrets with `cf set-env atlasmind-netra-mcp <VAR> <value>` followed by `cf restage atlasmind-netra-mcp`.
+
+### Connect Claude Desktop to the deployed server
+
+```json
+{
+  "mcpServers": {
+    "atlasmind-netra": {
+      "transport": "http",
+      "url": "https://netra.<CF_DOMAIN>/mcp",
+      "headers": {
+        "X-API-Key": "<NETRA_SERVER__API_KEY value>"
+      }
+    }
+  }
+}
+```
+
+Omit `headers` if `NETRA_SERVER__API_KEY` is not set.
+
 ## Shared session store (Valkey)
 
 By default the server uses an in-process TTL dict for session state (`NETRA_SERVER__SESSION_BACKEND=memory`). This works for single-instance deployments. For horizontal scaling - multiple server instances behind a load balancer - sessions must be shared, otherwise a clarification turn can land on a different instance than the one that started the session.

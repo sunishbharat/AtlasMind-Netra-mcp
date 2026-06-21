@@ -4,13 +4,17 @@ The entire object graph is wired in build_orchestrator/build_briefing_orchestrat
 nowhere else (dependency injection). Four MCP tools are exposed.
 """
 
+import asyncio
 import logging
+import re
 from pathlib import Path
 
 import httpx
 import structlog
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from pydantic_ai.models import Model
 
 from briefings.delivery import build_delivery_channel
@@ -25,6 +29,7 @@ from core.issue_analyser import build_issue_analyser
 from core.jira_fields_loader import JiraFieldsLoader
 from core.llm_provider import create_llm_provider
 from core.orchestrator import ElicitFn, Orchestrator, QueryHandler
+from core.report_renderer import ReportRenderer
 from core.ranking_engine import RankingEngine, load_ranking_rule
 from core.report_synthesiser import ReportSynthesiser
 from core.vocab_lookup import VocabLookup
@@ -86,6 +91,7 @@ def build_orchestrator(
     settings: Settings,
     llm_model: Model | str | None = None,
     session_store: BaseSessionStore | None = None,
+    renderer: ReportRenderer | None = None,
 ) -> tuple[Orchestrator, AtlasMindLiteClient]:
     """Wire the query_jira object graph from settings.
 
@@ -95,6 +101,7 @@ def build_orchestrator(
     both orchestrators are created together in create_server.
     Accepts an optional session_store so create_server can inject the configured backend;
     falls back to InMemorySessionStore when called directly (e.g. from tests).
+    Accepts an optional renderer so create_server can share it with the HTTP route handler.
     """
     vocab = VocabLookup(settings.clarification.vocab_path)
     http = httpx.AsyncClient(
@@ -127,6 +134,7 @@ def build_orchestrator(
         report_synthesiser=ReportSynthesiser(max_issues=settings.delivery.max_issues),
         delivery_channel=build_delivery_channel(settings.delivery),
         settings=settings,
+        renderer=renderer,
     ), lite_client
 
 
@@ -216,11 +224,13 @@ def create_server(
         _provider = create_llm_provider(settings.llm)
         _provider.validate_credentials()
         shared_llm = _provider.make_model()
+    renderer = ReportRenderer(settings.server.public_url)
     if orchestrator is None:
         orch, shared_lite = build_orchestrator(
             settings,
             llm_model=shared_llm,
             session_store=create_session_store(settings),
+            renderer=renderer,
         )
     else:
         orch = orchestrator
@@ -255,6 +265,10 @@ def create_server(
         their answer as `clarification_answer`. Do NOT answer the clarification
         question yourself.
 
+        IMPORTANT: When the response contains a non-null `view_url`, always present it to
+        the user as a clickable link at the end of your reply, e.g.:
+        "View the full report: <view_url>". Do not omit or paraphrase it.
+
         Set `show_in_ui: true` only when the user asks to see the result (table/chart)
         rendered in their AtlasMind browser window; it requires an open browser session
         and must remain opt-in per call.
@@ -264,7 +278,8 @@ def create_server(
         queries, and writes a SINGLE combined .md report with per-issue analysis and ranked
         blockers.
         """
-        elicit = _make_elicit(ctx) if ctx is not None else None
+        _is_stateless = settings.server.transport == "streamable-http"
+        elicit = _make_elicit(ctx) if (ctx is not None and not _is_stateless) else None
         return await orch.handle_query(
             query=query,
             session_id=session_id,
@@ -296,7 +311,8 @@ def create_server(
 
         template_id is reserved for future briefing templates and has no effect yet.
         """
-        elicit = _make_elicit(ctx) if ctx is not None else None
+        _is_stateless = settings.server.transport == "streamable-http"
+        elicit = _make_elicit(ctx) if (ctx is not None and not _is_stateless) else None
         return await briefing_orch.generate_briefing(
             agenda_text=agenda_text,
             session_id=session_id,
@@ -327,6 +343,25 @@ def create_server(
     ) -> JiraContextResponse:
         """Jira instance metadata: projects, fields, priorities, issue types."""
         raise ToolError("get_jira_context is not implemented.")
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> Response:
+        return JSONResponse({"status": "ok"})
+
+    @mcp.custom_route("/report/{report_id}", methods=["GET"])
+    async def serve_report(request: Request) -> Response:
+        report_id = request.path_params["report_id"]
+        # Whitelist only alphanumeric + _ and -; cap at 80 chars (current format is ~35)
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,79}", report_id):
+            return Response("Not found", status_code=404)
+        md_path = settings.delivery.output_dir / f"{report_id}.md"
+        if not await asyncio.to_thread(md_path.exists):
+            return Response("Report not found", status_code=404)
+        content = await asyncio.to_thread(md_path.read_text, "utf-8")
+        return HTMLResponse(
+            renderer.render_html(report_id, content),
+            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"},
+        )
 
     return mcp
 
@@ -378,6 +413,7 @@ def main() -> None:
             host=settings.server.host,
             port=settings.server.port,
             stateless_http=True,
+            uvicorn_config={"log_config": None},
         )
     else:
         server.run()  # stdio (development default)

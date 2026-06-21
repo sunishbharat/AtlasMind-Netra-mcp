@@ -58,6 +58,11 @@ class QueryResponse(BaseModel):
         description="Location of the human-verifiable markdown report written for this "
         "query (None when delivery is disabled or failed).",
     )
+    view_url: str | None = Field(
+        default=None,
+        description="URL to view the report in a browser. Only set when "
+        "NETRA_SERVER__PUBLIC_URL is configured.",
+    )
     applied_conventions: list[AppliedConvention] = Field(default_factory=list)
     errors: list[str] = Field(
         default_factory=list,

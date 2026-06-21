@@ -245,15 +245,80 @@ Requires Docker Desktop 4.x+ with buildx (shipped by default).
 bash scripts/docker-build-local.sh
 ```
 
-Detects your native architecture (`amd64` on Intel/AMD, `arm64` on Apple Silicon), builds with `--load` into the local daemon, and tags the image `ghcr.io/sunishbharat/atlasmind-netra-mcp:local`. Test it with:
+Detects your native architecture (`amd64` on Intel/AMD, `arm64` on Apple Silicon), builds with `--load` into the local daemon, and tags the image using the latest git tag (e.g. `ghcr.io/sunishbharat/atlasmind-netra-mcp:v0.1.0`), falling back to `:dev` if no tags exist. To override, set `VERSION` before running:
+
+```bash
+# Linux / macOS / Git Bash
+VERSION=v0.2.0-dev bash scripts/docker-build-local.sh
+VERSION=latest bash scripts/docker-build-local.sh
+```
+
+```powershell
+# Windows PowerShell
+$env:VERSION = "v0.2.0-dev"; bash scripts/docker-build-local.sh
+$env:VERSION = "latest"; bash scripts/docker-build-local.sh
+```
+
+Test it with:
 
 ```bash
 docker run -p 8765:8765 --env-file .env \
-  ghcr.io/sunishbharat/atlasmind-netra-mcp:local
+  ghcr.io/sunishbharat/atlasmind-netra-mcp:latest
 curl http://localhost:8765/health
 ```
 
-### Build and push multi-platform (amd64 + arm64)
+### Release images (CI-built, multi-arch)
+
+CI builds run on git tags - merges to `main` do not trigger a build.
+
+#### Tag naming rules
+
+| Tag format | Example | Images pushed to GHCR |
+|---|---|---|
+| Full release | `v0.1.0` | `:0.1.0`, `:0.1`, `:latest`, `:sha-<sha>` |
+| Pre-release | `v0.1.0-rc.1` | `:0.1.0-rc.1`, `:sha-<sha>` only - `:latest` is not touched |
+
+Use pre-release tags while validating the pipeline; switch to a full release tag when confident.
+
+To publish a release image, push a version tag from the `main` branch:
+
+```bash
+git tag v0.1.0 -m "Initial release"
+git push origin v0.1.0
+```
+
+GitHub Actions builds a single multi-arch manifest covering `linux/amd64` and `linux/arm64` and pushes these tags to GHCR:
+
+- `ghcr.io/sunishbharat/atlasmind-netra-mcp:0.1.0`
+- `ghcr.io/sunishbharat/atlasmind-netra-mcp:0.1`
+- `ghcr.io/sunishbharat/atlasmind-netra-mcp:latest`  ← added automatically; do NOT push a tag named `latest`
+- `ghcr.io/sunishbharat/atlasmind-netra-mcp:sha-<short-sha>`
+
+Docker automatically selects the correct layer for the host architecture - no separate `-arm64` tag is needed. To pull the latest release:
+
+```bash
+docker pull ghcr.io/sunishbharat/atlasmind-netra-mcp:latest
+docker run -p 8765:8765 --env-file .env \
+  ghcr.io/sunishbharat/atlasmind-netra-mcp:latest
+curl http://localhost:8765/health
+```
+
+To test CI without updating `:latest`, push a pre-release tag instead. `metadata-action` detects the `-rc.` suffix and suppresses `:latest` automatically:
+
+```bash
+git tag v0.1.1-rc.1 -m "Release candidate"
+git push origin v0.1.1-rc.1
+# pushes :0.1.1-rc.1 and :sha-<sha> only; :latest is not updated
+```
+
+To delete a bad tag before CI finishes (delete it both locally and on the remote, then cancel the running job in the GitHub Actions UI if it has already started):
+
+```bash
+git tag -d v0.1.0
+git push origin :refs/tags/v0.1.0
+```
+
+### Build and push multi-platform (amd64 + arm64, manual CF deploy)
 
 One-time buildx setup required before the first push:
 

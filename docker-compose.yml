@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    image: ghcr.io/sunishbharat/atlasmind-netra-mcp:v0.1.0
     ports:
       - "8765:8765"
     env_file:

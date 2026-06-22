@@ -187,7 +187,7 @@ def build_issue_analyser(
         output_type=IssueAnalysisSuggestions,
         system_prompt=system_prompt,
         retries=retries,
-        model_settings={"bedrock_cache_instructions": True},
+        model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
     )
     return IssueAnalyser(
         agent=agent,

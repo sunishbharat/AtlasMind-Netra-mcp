@@ -81,7 +81,7 @@ def load_agenda_decomposer(
         output_type=AgendaDecomposition,
         system_prompt=system_prompt,
         retries=retries,
-        model_settings={"bedrock_cache_instructions": True},
+        model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
     )
     return AgendaDecomposer(agent=agent, max_topics=max_topics)
 

@@ -37,14 +37,14 @@ class Clarifier:
             output_type=ClarificationNeeded,
             system_prompt=system_prompt,
             retries=retries,
-            model_settings={"bedrock_cache_instructions": True},
+            model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
         )
         self._resolve_agent = Agent(
             model,
             output_type=ResolvedTerms,
             system_prompt=system_prompt,
             retries=retries,
-            model_settings={"bedrock_cache_instructions": True},
+            model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
         )
 
     async def formulate_question(

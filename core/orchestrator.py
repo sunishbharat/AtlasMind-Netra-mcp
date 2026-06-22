@@ -341,6 +341,35 @@ class Orchestrator:
 
         log.info("query_dispatched", jql=result.jql, total=result.total, shown=result.shown)
 
+        if result.total == 0:
+            jql_detail = f" (JQL used: `{result.jql}`)" if result.jql else ""
+            hints_detail = ""
+            if active:
+                hints = "; ".join(f'"{r.term}" -> {r.jql_hint}' for r in active.values())
+                hints_detail = f" I applied these field interpretations: {hints}."
+            question = (
+                f"The query returned zero results{jql_detail}.{hints_detail} "
+                "This usually means a field name or field value does not match what is "
+                "configured on your Jira instance. Could you please verify: "
+                "(1) the exact field names available on your Jira instance, "
+                "(2) the exact allowed values for those fields (e.g. status names, priority names, "
+                "labels, issue types), and (3) the project key? "
+                "Please rephrase your query with the correct field names and values, "
+                "or let me know which part to correct."
+            )
+            log.info("zero_results_asking_for_clarification", jql=result.jql)
+            zero_response = QueryResponse(
+                session_id=session.session_id,
+                requires_user_input=True,
+                clarification_question=question,
+                jql=result.jql,
+                total=0,
+                shown=0,
+                applied_conventions=applied,
+                errors=errors,
+            )
+            return await self._with_report(query, zero_response, log)
+
         ui_injected = False
         if show_in_ui:
             if result.jql:

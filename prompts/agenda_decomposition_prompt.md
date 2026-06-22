@@ -17,3 +17,7 @@ Rules:
 - Maximum 10 topics. Group related items if there are more.
 - Never invent Jira data. Only extract what is explicitly stated or strongly implied.
 - topic_id must be unique within the list (topic_1, topic_2, ...).
+- NEVER embed assumed Jira field names or field values in suggested_query. Write queries in
+  plain natural language only (e.g. "top blockers in project ALPHA", NOT
+  "status = Blocked AND project = ALPHA"). Field resolution happens downstream in the
+  clarification step where the actual instance fields and values are known.

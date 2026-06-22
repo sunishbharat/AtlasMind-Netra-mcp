@@ -33,10 +33,18 @@ class Clarifier:
         except OSError as exc:
             raise ConfigError(f"{prompt_path}: cannot read clarification prompt: {exc}") from exc
         self._question_agent = Agent(
-            model, output_type=ClarificationNeeded, system_prompt=system_prompt, retries=retries
+            model,
+            output_type=ClarificationNeeded,
+            system_prompt=system_prompt,
+            retries=retries,
+            model_settings={"bedrock_cache_instructions": True},
         )
         self._resolve_agent = Agent(
-            model, output_type=ResolvedTerms, system_prompt=system_prompt, retries=retries
+            model,
+            output_type=ResolvedTerms,
+            system_prompt=system_prompt,
+            retries=retries,
+            model_settings={"bedrock_cache_instructions": True},
         )
 
     async def formulate_question(

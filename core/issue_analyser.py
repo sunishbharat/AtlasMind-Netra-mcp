@@ -183,7 +183,11 @@ def build_issue_analyser(
             f"{settings.prompt_path}: cannot read issue analysis prompt: {exc}"
         ) from exc
     agent: Agent[None, IssueAnalysisSuggestions] = Agent(
-        model, output_type=IssueAnalysisSuggestions, system_prompt=system_prompt, retries=retries
+        model,
+        output_type=IssueAnalysisSuggestions,
+        system_prompt=system_prompt,
+        retries=retries,
+        model_settings={"bedrock_cache_instructions": True},
     )
     return IssueAnalyser(
         agent=agent,

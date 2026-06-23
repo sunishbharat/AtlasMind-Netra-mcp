@@ -529,15 +529,7 @@ def _fetch_fields_files(settings: Settings) -> None:
 
 
 def main() -> None:
-    _log_empty_netra_env_vars()
     settings = Settings()
-
-
-def _log_empty_netra_env_vars() -> None:
-    import os
-    empty = [k for k, v in os.environ.items() if k.startswith("NETRA_") and v == ""]
-    if empty:
-        print(f"[startup] WARNING: empty NETRA_ env vars (will be ignored): {empty}", flush=True)
     _resolve_relative_paths(settings)
     _fetch_fields_files(settings)
     configure_logging(settings.log)

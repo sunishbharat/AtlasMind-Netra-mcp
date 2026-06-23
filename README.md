@@ -58,21 +58,19 @@ Two of the five MCP tools support Confluence:
 
 | Tool | Confluence role |
 |---|---|
-| `search_context` | Direct Confluence search - call it explicitly to investigate pages by topic, version, or keyword |
-| `generate_briefing` | Internally searches Confluence per agenda topic (when configured) and passes found page references into issue analysis, surfacing Confluence evidence alongside Jira comments |
+| `search_context` | Direct Confluence search - investigate pages by topic, version, or keyword; supports pinning specific pages by URL |
+| `generate_briefing` | Researches each agenda topic concurrently in Confluence (when configured) and passes found page references into issue analysis, surfacing Confluence evidence alongside Jira comments |
 
-Both tools require `NETRA_CONFLUENCE__BASE_URL` and `NETRA_CONFLUENCE__API_TOKEN` to be set. When they are not set, `search_context` returns an empty result (no error) and `generate_briefing` runs without Confluence context.
+Both tools require `NETRA_CONFLUENCE__BASE_URL` and `NETRA_CONFLUENCE__API_TOKEN` to be set. When they are not set, `search_context` returns an empty result and `generate_briefing` runs without Confluence context - no errors, fully opt-in.
 
-To enable, add these vars to `.env`:
+### Authentication
 
-| Variable | Description |
-|---|---|
-| `NETRA_CONFLUENCE__BASE_URL` | Confluence base URL. Cloud: `https://yourorg.atlassian.net/wiki`. Server/DC: `https://confluence.internal` (no `/wiki` suffix) |
-| `NETRA_CONFLUENCE__EMAIL` | Confluence account email (Cloud only; omit for Server/DC) |
-| `NETRA_CONFLUENCE__API_TOKEN` | Confluence API token (Cloud) or PAT (Server/DC). Create at id.atlassian.com/manage-profile/security/api-tokens |
-| `NETRA_CONFLUENCE__DEFAULT_SPACES` | Comma-separated space keys to search, e.g. `ENG,PROJ` (optional; searches all spaces if unset) |
+| Auth type | Instance type | What to set |
+|---|---|---|
+| Basic Auth | Confluence Cloud (`atlassian.net`) | `BASE_URL` (with `/wiki`) + `EMAIL` + `API_TOKEN` |
+| Bearer token | Confluence Server / Data Center | `BASE_URL` (no `/wiki`) + `API_TOKEN` only |
 
-Example `.env` entries (Confluence Cloud):
+Cloud example (`.env`):
 
 ```
 NETRA_CONFLUENCE__BASE_URL=https://yourorg.atlassian.net/wiki
@@ -81,7 +79,51 @@ NETRA_CONFLUENCE__API_TOKEN=your_token_here
 NETRA_CONFLUENCE__DEFAULT_SPACES=ENG,DOCS
 ```
 
-`search_context` accepts a natural-language query and an optional `spaces` list override. It extracts version references and intent type via `QueryIntentAnalyser`, builds up to three CQL variants, deduplicates results, and runs each matching page through `ContextExtractor` to return the most relevant passage. When Confluence is configured, `generate_briefing` also researches each agenda topic concurrently and passes the found page references into the issue analysis step, surfacing Confluence evidence alongside Jira comments.
+Server/DC example (`.env`):
+
+```
+NETRA_CONFLUENCE__BASE_URL=https://confluence.internal
+NETRA_CONFLUENCE__API_TOKEN=your_pat_here
+NETRA_CONFLUENCE__DEFAULT_SPACES=ENG,DOCS
+```
+
+### Configuration reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `NETRA_CONFLUENCE__BASE_URL` | unset | Confluence base URL. Cloud: append `/wiki`. Server/DC: root URL, no `/wiki`. |
+| `NETRA_CONFLUENCE__API_TOKEN` | unset | API token (Cloud) or PAT (Server/DC). Create at id.atlassian.com/manage-profile/security/api-tokens. |
+| `NETRA_CONFLUENCE__EMAIL` | unset | Cloud only - account email for Basic Auth. Omit for Server/DC. |
+| `NETRA_CONFLUENCE__DEFAULT_SPACES` | (all spaces) | Comma-separated space keys, e.g. `ENG,OPS`. Searches all spaces when unset. |
+| `NETRA_CONFLUENCE__SEARCH_LIMIT` | `10` | Max pages returned per CQL variant. Three variants run per query, then deduplicated. |
+| `NETRA_CONFLUENCE__MAX_PAGES_TOTAL` | `8` | Max pages processed (post-dedup) per topic. Caps total LLM extraction calls. |
+| `NETRA_CONFLUENCE__CONFLUENCE_CONCURRENCY` | `3` | Max concurrent page-fetch and LLM extraction calls per topic. |
+| `NETRA_CONFLUENCE__CONTENT_MAX_CHARS` | `10000` | Max characters of section text passed to LLM per page. |
+| `NETRA_CONFLUENCE__PAGE_CACHE_TTL_SECONDS` | `300` | Cache lifetime for raw Confluence page HTML, in seconds. |
+| `NETRA_CONFLUENCE__RECENCY_DAYS` | `30` | Days back for the CQL `lastModified` filter. |
+
+### `search_context` tool parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `query` | `str` | Natural-language question or topic to research. |
+| `spaces` | `list[str] \| None` | Space key override for this call; takes precedence over `NETRA_CONFLUENCE__DEFAULT_SPACES`. |
+| `recency_days` | `int \| None` | Days back for `lastModified` CQL filter (default: 30). Pass `null` to remove the recency constraint. |
+| `limit` | `int` | Max pages to return (default: 5). |
+| `page_urls` | `list[str] \| None` | Specific Confluence page URLs to pin alongside the CQL search. Pinned pages fill the result budget first; when `len(page_urls) >= limit` the CQL search and intent analysis LLM call are skipped entirely, saving one LLM call and three Confluence API calls. Supports Cloud (`/pages/{id}/`) and Server viewpage (`?pageId=`) URL formats. URLs without a numeric page ID are reported in `errors` and skipped gracefully. |
+| `force_refresh` | `bool` | Bypass all caches and re-fetch from Confluence (default: `false`). Use when the user says results are stale or wrong. |
+
+### Cache and `force_refresh`
+
+Both `search_context` and `generate_briefing` cache Confluence data at three levels to avoid redundant network and LLM calls:
+
+| Cache | Stores | Lifetime |
+|---|---|---|
+| Page HTML (TTLCache) | Raw Confluence page HTML | `NETRA_CONFLUENCE__PAGE_CACHE_TTL_SECONDS` (default 300 s) |
+| Extraction (LRUCache) | Per-page LLM extraction output | Evicted by LRU |
+| Issue analysis (FIFO dict) | Per-issue analysis result | Max 1000 entries, FIFO eviction |
+
+Pass `force_refresh=true` when the user reports stale or incorrect data. The call skips all three cache reads but still writes the fresh result back, so the next call without `force_refresh` is served from cache. On `generate_briefing`, `force_refresh` propagates into all three caches throughout the briefing pipeline.
 
 ## How to test the MCP server
 
@@ -119,7 +161,7 @@ Then in the inspector:
 4. With the atlasMind backend running you get JQL + issues back; without it you get a graceful `errors: ["backend unreachable after retries: ..."]` response, which still proves the clarification loop end-to-end.
 5. Repeat step 1 with a new `session_id` - no question this time: the convention was learned and persisted to `data/conventions.json`.
 
-All five tools are live. Try `generate_briefing` with `agenda_text = "top blockers in project X, risks for carline Y"` and `session_id = "brief-1"` to see the full briefing pipeline. Try `search_context` with `query = "release blockers for R1"` (requires `NETRA_CONFLUENCE__URL` to be set).
+All five tools are live. Try `generate_briefing` with `agenda_text = "top blockers in project X, risks for carline Y"` and `session_id = "brief-1"` to see the full briefing pipeline. Try `search_context` with `query = "release blockers for R1"` (requires `NETRA_CONFLUENCE__BASE_URL` to be set).
 
 ### 3. Testing from Claude Desktop (stdio)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 import structlog
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 from pydantic_ai.exceptions import AgentRunError, UserError
 from pydantic_ai.models import Model
 
@@ -81,7 +81,10 @@ def load_agenda_decomposer(
         output_type=AgendaDecomposition,
         system_prompt=system_prompt,
         retries=retries,
-        model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
+        model_settings=ModelSettings(  # type: ignore[typeddict-unknown-key]
+            bedrock_cache_instructions=True,
+            anthropic_cache_instructions=True,
+        ),
     )
     return AgendaDecomposer(agent=agent, max_topics=max_topics)
 

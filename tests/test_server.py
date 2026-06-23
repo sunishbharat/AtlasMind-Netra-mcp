@@ -7,6 +7,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from config.settings import Settings
+from confluence.models.response import ConfluenceContextResponse
 from core.orchestrator import ElicitFn
 from models.responses import BriefingResponse, QueryResponse, ReportResponse
 from server import create_server
@@ -65,6 +66,15 @@ class FakeBriefingOrchestrator:
         self.get_calls.append(report_id)
         return ReportResponse(report_id=report_id)
 
+    async def search_context(
+        self,
+        query: str,
+        spaces: list[str] | None = None,
+        recency_days: int | None = None,
+        limit: int = 5,
+    ) -> ConfluenceContextResponse:
+        return ConfluenceContextResponse()
+
 
 @pytest.fixture
 def fake_orchestrator() -> FakeOrchestrator:
@@ -89,10 +99,16 @@ def server(
     )
 
 
-async def test_exposes_exactly_the_four_design_doc_tools(server: Any) -> None:
+async def test_exposes_exactly_the_five_design_doc_tools(server: Any) -> None:
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-    assert tools == {"query_jira", "generate_briefing", "get_report", "get_jira_context"}
+    assert tools == {
+        "query_jira",
+        "generate_briefing",
+        "get_report",
+        "get_jira_context",
+        "search_context",
+    }
 
 
 async def test_query_jira_round_trip(server: Any, fake_orchestrator: FakeOrchestrator) -> None:

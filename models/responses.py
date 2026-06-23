@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from confluence.models.reference import ConfluenceReference
 from models.jira import JiraField
 from models.lite import ChartSpec
 
@@ -206,6 +207,10 @@ class BlockerAnalysis(BaseModel):
 
     # Set by RankingEngine via model_copy(update={"score": ...})
     score: float = 0.0
+
+    # Confluence pages that mention this issue (structural fact, not AI suggestion).
+    # Populated only when NETRA_CONFLUENCE__BASE_URL is configured.
+    confluence_refs: list[ConfluenceReference] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

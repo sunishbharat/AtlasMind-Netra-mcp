@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from config.settings import Settings, ValkeySettings
+from config.settings import Settings
 from memory.briefing_session_store import (
     BaseBriefingSessionStore,
     InMemoryBriefingSessionStore,
@@ -19,7 +18,7 @@ def _make_settings(backend: str = "memory") -> Settings:
     """Create Settings with the given session_backend."""
     return Settings(
         server={"session_backend": backend},  # type: ignore[arg-type]
-        session={"ttl_seconds": 120.0},
+        session={"ttl_seconds": 120.0},  # type: ignore[arg-type]
         valkey={"url": "valkey://localhost:6379/0"},  # type: ignore[arg-type]
     )
 
@@ -37,10 +36,10 @@ class TestCreateSessionStore:
     @patch("memory.valkey_stores.ValkeySessionStore")
     @patch("memory.valkey_stores.make_valkey_client")
     def test_valkey_backend_returns_valkey_store(
-        self, mock_make_client: patch, mock_store_class: patch
+        self, mock_make_client: MagicMock, mock_store_class: MagicMock
     ) -> None:
         """When session_backend=valkey, returns ValkeySessionStore."""
-        mock_client = {}
+        mock_client: Any = {}
         mock_make_client.return_value = mock_client
         mock_store_class.return_value = "valkey-store-instance"
 
@@ -49,7 +48,7 @@ class TestCreateSessionStore:
 
         mock_make_client.assert_called_once_with(settings.valkey)
         mock_store_class.assert_called_once_with(mock_client, settings.session.ttl_seconds)
-        assert result == "valkey-store-instance"
+        assert result == "valkey-store-instance"  # type: ignore[comparison-overlap]
 
 
 class TestCreateBriefingSessionStore:
@@ -65,10 +64,10 @@ class TestCreateBriefingSessionStore:
     @patch("memory.valkey_stores.ValkeyBriefingSessionStore")
     @patch("memory.valkey_stores.make_valkey_client")
     def test_valkey_backend_returns_valkey_store(
-        self, mock_make_client: patch, mock_store_class: patch
+        self, mock_make_client: MagicMock, mock_store_class: MagicMock
     ) -> None:
         """When session_backend=valkey, returns ValkeyBriefingSessionStore."""
-        mock_client = {}
+        mock_client: Any = {}
         mock_make_client.return_value = mock_client
         mock_store_class.return_value = "valkey-briefing-store-instance"
 
@@ -77,7 +76,7 @@ class TestCreateBriefingSessionStore:
 
         mock_make_client.assert_called_once_with(settings.valkey)
         mock_store_class.assert_called_once_with(mock_client, settings.session.ttl_seconds)
-        assert result == "valkey-briefing-store-instance"
+        assert result == "valkey-briefing-store-instance"  # type: ignore[comparison-overlap]
 
 
 class TestStoreFactoryTypeSafety:
@@ -104,9 +103,10 @@ class TestStoreFactoryTypeSafety:
         store = create_session_store(settings)
         # InMemorySessionStore stores ttl_seconds internally; verify via get
         import asyncio
+
         from memory.session_store import SessionState
 
-        async def check():
+        async def check() -> None:
             await store.set(SessionState(session_id="check-ttl"))
             # With TTL=120, the entry should exist
             result = await store.get("check-ttl")

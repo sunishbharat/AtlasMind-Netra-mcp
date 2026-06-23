@@ -4,7 +4,7 @@ AtlasMind-Netra-mcp is the AI agent and MCP server layer of the AtlasMind platfo
 
 Jira queries written by an LLM routinely fail or return wrong results because natural language is ambiguous - "escalation" could be a label, a custom field, or a priority value; "today" could mean created, updated, or due today; "my team" has no JQL equivalent. This agent fixes that by detecting ambiguous terms, asking one targeted clarifying question using real field names from the live Jira instance, learning team conventions so the same question is never asked twice, and only calling `atlasMind-Lite` once the intent is fully resolved.
 
-Four MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_report`, and `get_jira_context`. Everything else - the clarification loop, session store, intent classifier, and conventions store - is internal. All four tools are fully wired: `query_jira` runs the clarification-to-dispatch loop; `generate_briefing` decomposes a meeting agenda into topics, runs per-topic analysis, and returns a ranked, cited briefing; `get_report` fetches a stored briefing by ID; `get_jira_context` returns Jira instance metadata. The server is production-ready for cloud deployment (streamable-http with `stateless_http=True`, bounded in-memory cache, and an optional Valkey session store for horizontal scaling).
+Five MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_report`, `get_jira_context`, and `search_context`. Everything else - the clarification loop, session store, intent classifier, and conventions store - is internal. All five tools are fully wired: `query_jira` runs the clarification-to-dispatch loop; `generate_briefing` decomposes a meeting agenda into topics, runs per-topic analysis, and returns a ranked, cited briefing optionally enriched with Confluence context; `get_report` fetches a stored briefing by ID; `get_jira_context` returns Jira instance metadata; `search_context` searches Confluence via CQL and returns ranked page excerpts for a natural-language query. The server is production-ready for cloud deployment (streamable-http with `stateless_http=True`, bounded in-memory cache, and an optional Valkey session store for horizontal scaling).
 
 ## Prerequisites
 
@@ -15,6 +15,7 @@ Four MCP tools are exposed publicly: `query_jira`, `generate_briefing`, `get_rep
   - [Google AI Studio](https://aistudio.google.com/apikey) (free tier): `GOOGLE_API_KEY`
   - Anthropic, AWS Bedrock, or any OpenAI-compatible endpoint (see [LLM providers](#llm-providers) below)
 - Optional for end-to-end runs: the atlasMind backend running on `http://localhost:8000`
+- Optional for Confluence research (`search_context` tool and briefing enrichment): a Confluence Cloud or Data Center instance with API token auth
 
 ## Setup
 
@@ -31,7 +32,7 @@ Every setting is overridable via `NETRA_*` environment variables; see `.env.exam
 
 ## LLM providers
 
-The clarifier, agenda decomposer, and issue analyser all use the same LLM, configured with two env vars:
+All five AI agents (clarifier, agenda decomposer, issue analyser, query intent analyser, and context extractor) share the same LLM, configured with two env vars:
 
 | Provider | `NETRA_LLM__MODEL` | API key env var | Notes |
 |---|---|---|---|
@@ -50,6 +51,37 @@ GOOGLE_API_KEY=your_key_here
 ```
 
 The provider is detected automatically from the model string prefix - no other code changes needed when switching.
+
+## Confluence research
+
+Two of the five MCP tools support Confluence:
+
+| Tool | Confluence role |
+|---|---|
+| `search_context` | Direct Confluence search - call it explicitly to investigate pages by topic, version, or keyword |
+| `generate_briefing` | Internally searches Confluence per agenda topic (when configured) and passes found page references into issue analysis, surfacing Confluence evidence alongside Jira comments |
+
+Both tools require `NETRA_CONFLUENCE__BASE_URL` and `NETRA_CONFLUENCE__API_TOKEN` to be set. When they are not set, `search_context` returns an empty result (no error) and `generate_briefing` runs without Confluence context.
+
+To enable, add these vars to `.env`:
+
+| Variable | Description |
+|---|---|
+| `NETRA_CONFLUENCE__BASE_URL` | Confluence base URL. Cloud: `https://yourorg.atlassian.net/wiki`. Server/DC: `https://confluence.internal` (no `/wiki` suffix) |
+| `NETRA_CONFLUENCE__EMAIL` | Confluence account email (Cloud only; omit for Server/DC) |
+| `NETRA_CONFLUENCE__API_TOKEN` | Confluence API token (Cloud) or PAT (Server/DC). Create at id.atlassian.com/manage-profile/security/api-tokens |
+| `NETRA_CONFLUENCE__DEFAULT_SPACES` | Comma-separated space keys to search, e.g. `ENG,PROJ` (optional; searches all spaces if unset) |
+
+Example `.env` entries (Confluence Cloud):
+
+```
+NETRA_CONFLUENCE__BASE_URL=https://yourorg.atlassian.net/wiki
+NETRA_CONFLUENCE__EMAIL=you@yourorg.com
+NETRA_CONFLUENCE__API_TOKEN=your_token_here
+NETRA_CONFLUENCE__DEFAULT_SPACES=ENG,DOCS
+```
+
+`search_context` accepts a natural-language query and an optional `spaces` list override. It extracts version references and intent type via `QueryIntentAnalyser`, builds up to three CQL variants, deduplicates results, and runs each matching page through `ContextExtractor` to return the most relevant passage. When Confluence is configured, `generate_briefing` also researches each agenda topic concurrently and passes the found page references into the issue analysis step, surfacing Confluence evidence alongside Jira comments.
 
 ## How to test the MCP server
 
@@ -87,7 +119,7 @@ Then in the inspector:
 4. With the atlasMind backend running you get JQL + issues back; without it you get a graceful `errors: ["backend unreachable after retries: ..."]` response, which still proves the clarification loop end-to-end.
 5. Repeat step 1 with a new `session_id` - no question this time: the convention was learned and persisted to `data/conventions.json`.
 
-All four tools are live. Try `generate_briefing` with `agenda_text = "top blockers in project X, risks for carline Y"` and `session_id = "brief-1"` to see the full briefing pipeline.
+All five tools are live. Try `generate_briefing` with `agenda_text = "top blockers in project X, risks for carline Y"` and `session_id = "brief-1"` to see the full briefing pipeline. Try `search_context` with `query = "release blockers for R1"` (requires `NETRA_CONFLUENCE__URL` to be set).
 
 ### 3. Testing from Claude Desktop (stdio)
 
@@ -167,7 +199,7 @@ To change the bind address or port, set `NETRA_SERVER__HOST` / `NETRA_SERVER__PO
 npx @modelcontextprotocol/inspector
 ```
 
-In the browser UI that opens: select transport **Streamable HTTP**, enter `http://127.0.0.1:8765/mcp`, and click **Connect**. You get the same UI as the stdio dev mode - list the four tools and call `query_jira` with JSON arguments (see the test script in section 2).
+In the browser UI that opens: select transport **Streamable HTTP**, enter `http://127.0.0.1:8765/mcp`, and click **Connect**. You get the same UI as the stdio dev mode - list the five tools and call `query_jira` with JSON arguments (see the test script in section 2).
 
 #### Terminal 2, Option B - Claude Code
 

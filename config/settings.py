@@ -140,11 +140,17 @@ class ClarificationSettings(BaseModel):
     )
     jira_fields_url: str | None = Field(
         default=None,
-        description="HTTP URL for jira_fields.json (CF static-file app); takes effect only when jira_fields_path is unset.",
+        description=(
+            "HTTP URL for jira_fields.json (CF static-file app);"
+            " takes effect only when jira_fields_path is unset."
+        ),
     )
     allowed_values_url: str | None = Field(
         default=None,
-        description="HTTP URL for jira_allowed_values.json (CF static-file app); takes effect only when allowed_values_path is unset.",
+        description=(
+            "HTTP URL for jira_allowed_values.json (CF static-file app);"
+            " takes effect only when allowed_values_path is unset."
+        ),
     )
     max_rounds: int = Field(
         default=3,
@@ -301,6 +307,88 @@ class LogSettings(BaseModel):
         return v
 
 
+class ConfluenceSettings(BaseModel):
+    """Confluence integration (optional).
+
+    When base_url is unset, all Confluence features are disabled and the pipeline
+    runs exactly as before (opt-in design - existing tests are unaffected).
+
+    Cloud:  base_url ends in /wiki; requires email + api_token (Basic Auth).
+    Server: base_url is the Confluence root, no /wiki suffix; only api_token (Bearer).
+    """
+
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Confluence base URL. Cloud: https://org.atlassian.net/wiki. "
+            "Server: https://confluence.internal (do NOT append /wiki for Server). "
+            "If unset, Confluence features are disabled. NETRA_CONFLUENCE__BASE_URL."
+        ),
+    )
+    api_token: SecretStr | None = Field(
+        default=None,
+        description="API token (Cloud) or PAT (Server). NETRA_CONFLUENCE__API_TOKEN.",
+    )
+    email: str | None = Field(
+        default=None,
+        description=(
+            "Email for Cloud Basic Auth. Omit for Server/DC (Bearer token used instead). "
+            "NETRA_CONFLUENCE__EMAIL."
+        ),
+    )
+    default_spaces: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Default Confluence space keys to search. NETRA_CONFLUENCE__DEFAULT_SPACES. "
+            "Accepts a comma-separated string (ENG,OPS) or JSON array ([\"ENG\",\"OPS\"])."
+        ),
+    )
+
+    @field_validator("default_spaces", mode="before")
+    @classmethod
+    def _parse_spaces(cls, v: object) -> object:
+        if isinstance(v, str) and v and not v.startswith("["):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
+    search_limit: int = Field(
+        default=10,
+        description="Max pages per CQL variant search. NETRA_CONFLUENCE__SEARCH_LIMIT.",
+    )
+    max_pages_total: int = Field(
+        default=8,
+        description=(
+            "Max pages to process (post-dedup across all 3 CQL variants) per topic. "
+            "Caps total LLM extraction calls. NETRA_CONFLUENCE__MAX_PAGES_TOTAL."
+        ),
+    )
+    confluence_concurrency: int = Field(
+        default=3,
+        description=(
+            "Max concurrent page-fetch + LLM extraction calls. "
+            "Same semaphore pattern as AnalysisSettings.max_concurrency. "
+            "NETRA_CONFLUENCE__CONFLUENCE_CONCURRENCY."
+        ),
+    )
+    content_max_chars: int = Field(
+        default=10_000,
+        description=(
+            "Max chars of extracted section text passed to LLM per page. "
+            "NETRA_CONFLUENCE__CONTENT_MAX_CHARS."
+        ),
+    )
+    page_cache_ttl_seconds: int = Field(
+        default=300,
+        description=(
+            "TTL for Confluence page content cache."
+            " NETRA_CONFLUENCE__PAGE_CACHE_TTL_SECONDS."
+        ),
+    )
+    recency_days: int = Field(
+        default=30,
+        description="Days back for CQL lastModified filter. NETRA_CONFLUENCE__RECENCY_DAYS.",
+    )
+
+
 class Settings(BaseSettings):
     """Root settings object. Instantiate once in the composition root (server.py)."""
 
@@ -323,3 +411,4 @@ class Settings(BaseSettings):
     server: ServerSettings = Field(default_factory=ServerSettings)
     valkey: ValkeySettings = Field(default_factory=ValkeySettings)
     log: LogSettings = Field(default_factory=LogSettings)
+    confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)

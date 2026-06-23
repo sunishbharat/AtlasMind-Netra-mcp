@@ -16,3 +16,8 @@ applications:
       # Jira metadata served from a CF static-file app (cf push netra-fields-server ...)
       # NETRA_CLARIFICATION__JIRA_FIELDS_URL: https://FIELDS_SERVER_ROUTE/jira_fields.json
       # NETRA_CLARIFICATION__ALLOWED_VALUES_URL: https://FIELDS_SERVER_ROUTE/jira_allowed_values.json
+      # Confluence research layer (opt-in; omit to disable)
+      # NETRA_CONFLUENCE__BASE_URL: https://your-org.atlassian.net/wiki  # Cloud: append /wiki; Server: root URL, no /wiki
+      # NETRA_CONFLUENCE__API_TOKEN: ((vault-confluence-token))           # Cloud API token or Server PAT
+      # NETRA_CONFLUENCE__EMAIL: user@example.com                        # Cloud only; omit for Server/DC
+      # NETRA_CONFLUENCE__DEFAULT_SPACES: ENG,OPS                        # comma-separated space keys

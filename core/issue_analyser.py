@@ -15,11 +15,12 @@ import datetime
 from typing import Protocol
 
 import structlog
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 from pydantic_ai.exceptions import AgentRunError, UserError
 from pydantic_ai.models import Model
 
 from config.settings import AnalysisSettings
+from confluence.models.reference import ConfluenceReference
 from core.exceptions import AnalysisError, ConfigError
 from models.lite import IssueComment, IssueDetail, IssueDetailsResponse
 from models.responses import BlockerAnalysis, IssueAnalysisSuggestions
@@ -37,6 +38,7 @@ class IssueAnalyserPort(Protocol):
         issue_details: IssueDetailsResponse,
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
+        confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
     ) -> list[BlockerAnalysis]: ...
 
 
@@ -71,6 +73,7 @@ class IssueAnalyser:
         issue_details: IssueDetailsResponse,
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
+        confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
     ) -> list[BlockerAnalysis]:
         """Analyse each key from the pre-fetched IssueDetailsResponse.
 
@@ -78,14 +81,19 @@ class IssueAnalyser:
         POST /issue_details does not include a summary field. Falls back to "(no summary)"
         when both the model field and the dict are absent.
 
+        `confluence_refs` maps issue_key -> Confluence pages that mention that issue.
+        When present, page passages are injected into the LLM prompt as background context
+        (labelled AI SUGGESTION - trust boundary is preserved).
+
         Keys not present in `issue_details.issues` produce a degraded BlockerAnalysis
         (days_blocked=0, empty AI fields) - partial failure is a designed state.
         """
         issue_map = {d.key: d for d in issue_details.issues}
+        _refs = confluence_refs or {}
 
         async def bounded(key: str) -> BlockerAnalysis:
             async with self._semaphore:
-                return await self._analyse_key(key, issue_map, summaries)
+                return await self._analyse_key(key, issue_map, summaries, _refs)
 
         tasks = [bounded(key) for key in issue_keys]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -108,6 +116,7 @@ class IssueAnalyser:
         key: str,
         issue_map: dict[str, IssueDetail],
         summaries: dict[str, str] | None,
+        confluence_refs: dict[str, list[ConfluenceReference]],
     ) -> BlockerAnalysis:
         issue = issue_map.get(key)
         if issue is None:
@@ -117,9 +126,14 @@ class IssueAnalyser:
         cache_ts = issue.changelog[-1].timestamp if issue.changelog else ""
         cache_key = (key, cache_ts)
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            cached = self._cache[cache_key]
+            # Re-attach current confluence_refs (may have been enriched after caching).
+            refs = confluence_refs.get(key, [])
+            if refs and not cached.confluence_refs:
+                return cached.model_copy(update={"confluence_refs": refs})
+            return cached
 
-        result = await self._analyse_one(issue, summaries)
+        result = await self._analyse_one(issue, summaries, confluence_refs.get(key, []))
         if self._cache_max_size > 0:
             if len(self._cache) >= self._cache_max_size:
                 self._cache.pop(next(iter(self._cache)))
@@ -127,7 +141,10 @@ class IssueAnalyser:
         return result
 
     async def _analyse_one(
-        self, issue: IssueDetail, summaries: dict[str, str] | None
+        self,
+        issue: IssueDetail,
+        summaries: dict[str, str] | None,
+        refs: list[ConfluenceReference],
     ) -> BlockerAnalysis:
         today = self._today or datetime.date.today()
 
@@ -139,7 +156,7 @@ class IssueAnalyser:
         # Sort comments newest-first (Jira default is ascending/oldest-first).
         sorted_comments = sorted(issue.comments, key=lambda c: c.created, reverse=True)
 
-        prompt = _build_prompt(issue, summary, sorted_comments)
+        prompt = _build_prompt(issue, summary, sorted_comments, refs)
         try:
             run_result = await self._agent.run(prompt)
             suggestions: IssueAnalysisSuggestions = run_result.output
@@ -167,6 +184,7 @@ class IssueAnalyser:
             mitigation=suggestions.mitigation,
             risk_note=suggestions.risk_note,
             evidence=suggestions.evidence,
+            confluence_refs=refs,
         )
 
 
@@ -187,7 +205,10 @@ def build_issue_analyser(
         output_type=IssueAnalysisSuggestions,
         system_prompt=system_prompt,
         retries=retries,
-        model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
+        model_settings=ModelSettings(  # type: ignore[typeddict-unknown-key]
+            bedrock_cache_instructions=True,
+            anthropic_cache_instructions=True,
+        ),
     )
     return IssueAnalyser(
         agent=agent,
@@ -230,7 +251,12 @@ def _compute_days_blocked(
     return 0
 
 
-def _build_prompt(issue: IssueDetail, summary: str, sorted_comments: list[IssueComment]) -> str:
+def _build_prompt(
+    issue: IssueDetail,
+    summary: str,
+    sorted_comments: list[IssueComment],
+    confluence_refs: list[ConfluenceReference] | None = None,
+) -> str:
     lines = [
         "OPERATION: ANALYSE ISSUE",
         f"ISSUE KEY: {issue.key}",
@@ -259,6 +285,21 @@ def _build_prompt(issue: IssueDetail, summary: str, sorted_comments: list[IssueC
             )
     else:
         lines.append("COMMENTS: none")
+
+    if confluence_refs:
+        lines.append("")
+        lines.append(
+            "CONFLUENCE CONTEXT (external pages mentioning this issue - "
+            "treat as background, not authoritative fact):"
+        )
+        for ref in confluence_refs:
+            lines.append(f'[Page: "{ref.page_title}"]')
+            if ref.relevant_passage:
+                lines.append(f"Passage: {ref.relevant_passage[:300]}")
+        lines.append(
+            "(Use Confluence context only to enrich suggested_resolution, mitigation, "
+            "and risk_note. Never use it for fact fields like days_blocked or owner.)"
+        )
 
     lines += [
         "",

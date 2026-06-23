@@ -5,6 +5,23 @@ clarification), IssueAnalyser, RankingEngine, ReportSynthesiser, and DeliveryCha
 into a single generate_briefing call. Per-topic session IDs isolate clarification state
 so each topic's rounds are independent of the others.
 
+When ConfluenceClient is configured, _build_sections runs a 3-phase enrichment per topic:
+  Phase 1 - QueryIntentAnalyser extracts version refs and intent type
+  Phase 2 - Confluence CQL fan-out + LLM extraction (parallel, bounded by _confluence_sem)
+  Phase 3 - Reverse lookup: find pages for Jira-found keys not already resolved
+Confluence context is then injected into IssueAnalyser prompts (AI SUGGESTION trust boundary).
+When ConfluenceClient is None, the pipeline runs unchanged (opt-in design).
+
+Concurrency fixes (from multiuser_concurrency_fixes.md):
+  Item 1: self._confluence_sem at instance level (not per-call).
+  Item 3: structlog contextvars bound at tool-handler entry (in server.py).
+  Item 4: _fetch_and_extract returns values, single-threaded post-gather merge.
+  Item 5: Per-page asyncio.Lock in ConfluenceClient (see confluence/client/client.py).
+  Item 6: TODO comment at cache definitions (M4 auth decision required).
+  Item 7: spaces: list[str] | None param in _run_confluence_research + generate_briefing.
+
+TODO Item 2 (M4 ready): shard conventions store to data/conventions/{session_id}.json.
+  Requires Orchestrator to accept a per-session store factory; deferred to M4 auth decision.
 """
 
 import asyncio
@@ -12,13 +29,14 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 import structlog
 
 from briefings.delivery import BaseDeliveryChannel
 from config.settings import Settings
+from confluence.models.reference import ConfluenceReference
 from core.agenda_decomposer import AgendaDecomposerPort
 from core.exceptions import AnalysisError, DecompositionError, LiteBackendError, NetraError
 from core.issue_analyser import IssueAnalyserPort
@@ -35,6 +53,14 @@ from models.responses import (
     QueryResponse,
     ReportResponse,
 )
+
+if TYPE_CHECKING:
+    from confluence.client.base import ConfluenceClientProtocol
+    from confluence.extraction.extractor import ContextExtractor
+    from confluence.models.extraction import ContextExtractionOutput
+    from confluence.models.page import ConfluencePage
+    from confluence.models.response import ConfluenceContextResponse
+    from core.query_intent_analyser import QueryIntentAnalyserPort
 
 logger = structlog.get_logger(__name__)
 
@@ -54,6 +80,14 @@ class BriefingHandler(Protocol):
 
     async def get_briefing_report(self, report_id: str, session_id: str) -> ReportResponse: ...
 
+    async def search_context(
+        self,
+        query: str,
+        spaces: list[str] | None = None,
+        recency_days: int | None = None,
+        limit: int = 5,
+    ) -> "ConfluenceContextResponse": ...
+
 
 class BriefingOrchestrator:
     """Runs the generate_briefing pipeline end-to-end."""
@@ -70,6 +104,9 @@ class BriefingOrchestrator:
         delivery_channel: BaseDeliveryChannel,
         briefing_sessions: BaseBriefingSessionStore,
         settings: Settings,
+        intent_analyser: "QueryIntentAnalyserPort | None" = None,
+        confluence: "ConfluenceClientProtocol | None" = None,
+        context_extractor: "ContextExtractor | None" = None,
     ) -> None:
         self._decomposer = decomposer
         self._query_handler = query_handler
@@ -80,6 +117,15 @@ class BriefingOrchestrator:
         self._delivery = delivery_channel
         self._briefing_sessions = briefing_sessions
         self._settings = settings
+        self._intent_analyser = intent_analyser
+        self._confluence = confluence
+        self._context_extractor = context_extractor
+        # Item 1: semaphore at instance level, shared across all users and topics.
+        # No _llm_global_sem: the value would equal the sum of _analysis_sem +
+        # _confluence_sem, making it logically inert. Two independent pools are correct.
+        self._confluence_sem = asyncio.Semaphore(
+            settings.confluence.confluence_concurrency
+        )
 
     async def generate_briefing(
         self,
@@ -160,7 +206,27 @@ class BriefingOrchestrator:
 
         await self._briefing_sessions.delete(session_id)
 
-        sections = await self._build_sections(topics, completed, errors, log)
+        # Confluence enrichment (Phase 1-2) runs after all Jira queries complete.
+        # Phase 3 (reverse lookup) runs inside _run_confluence_research.
+        # TODO: move Phase 2 to before Jira queries to seed JQL (requires storing
+        # pre-pass results in BriefingPendingState across clarification round-trips).
+        confluence_refs: dict[str, list[ConfluenceReference]] = {}
+        if self._confluence is not None:
+            all_jira_keys: list[str] = []
+            for r in completed.values():
+                if r and r.issues:
+                    for issue in r.issues:
+                        key = issue.get("key") or issue.get("Key", "")
+                        if key:
+                            all_jira_keys.append(str(key))
+            try:
+                confluence_refs = await self._run_confluence_research(
+                    topics, completed, all_jira_keys, spaces=None
+                )
+            except Exception as exc:
+                log.warning("confluence_research_failed", error=str(exc))
+
+        sections = await self._build_sections(topics, completed, errors, log, confluence_refs)
         report_id = _make_report_id(session_id)
 
         content = self._synthesiser.build_briefing_report(
@@ -202,6 +268,131 @@ class BriefingOrchestrator:
             view_url=view_url,
             errors=errors,
         )
+
+    async def _run_confluence_research(
+        self,
+        topics: list[AgendaTopic],
+        completed: dict[str, QueryResponse],
+        all_jira_keys: list[str],
+        spaces: list[str] | None = None,  # Item 7: per-call override
+    ) -> dict[str, list[ConfluenceReference]]:
+        """Run Phase 1 (intent) + Phase 2 (Confluence search/extraction) for all topics.
+
+        Runs intent analysis + Confluence search per topic, then reverse lookup for
+        Jira-found keys not already resolved. Returns merged confluence_refs dict.
+
+        spaces: per-call override; falls back to NETRA_CONFLUENCE__DEFAULT_SPACES.
+        TODO M4: resolve spaces from user token claims or tenant config.
+        """
+        assert self._confluence is not None
+        assert self._context_extractor is not None
+
+        resolved_spaces = spaces or self._settings.confluence.default_spaces
+
+        # Per-topic Phase 1 + Phase 2 in parallel (bounded by _confluence_sem in _fetch_and_extract)
+        topic_tasks = [
+            self._research_topic(topic, resolved_spaces)
+            for topic in topics
+            if self._intent_analyser is not None
+        ]
+        topic_results = await asyncio.gather(*topic_tasks, return_exceptions=True)
+
+        confluence_refs: dict[str, list[ConfluenceReference]] = {}
+        for result in topic_results:
+            if isinstance(result, BaseException):
+                logger.warning("confluence_topic_research_failed", error=str(result))
+                continue
+            _keys, page_refs = result
+            for key, ref in page_refs.items():
+                confluence_refs.setdefault(key, []).append(ref)
+
+        # Phase 3: reverse lookup for Jira-found keys not already in confluence_refs.
+        reverse_keys = [k for k in all_jira_keys if k not in confluence_refs]
+        if reverse_keys and resolved_spaces:
+            try:
+                reverse = await self._confluence.find_pages_mentioning_keys(
+                    reverse_keys, resolved_spaces
+                )
+                existing_batch_ids: dict[str, set[str]] = {}
+                for key, pages in reverse.items():
+                    existing_ids = existing_batch_ids.setdefault(
+                        key, {r.page_id for r in confluence_refs.get(key, [])}
+                    )
+                    for page in pages:
+                        if page.page_id not in existing_ids:
+                            confluence_refs.setdefault(key, []).append(
+                                ConfluenceReference(
+                                    page_id=page.page_id,
+                                    page_title=page.title,
+                                    cql_excerpt=page.cql_excerpt,
+                                    relevant_passage="",
+                                )
+                            )
+                            existing_ids.add(page.page_id)
+            except Exception as exc:
+                logger.warning("confluence_reverse_lookup_failed", error=str(exc))
+
+        logger.info(
+            "confluence_research_complete",
+            issues_with_refs=len(confluence_refs),
+            total_refs=sum(len(v) for v in confluence_refs.values()),
+        )
+        return confluence_refs
+
+    async def _research_topic(
+        self,
+        topic: AgendaTopic,
+        spaces: list[str],
+    ) -> tuple[list[str], dict[str, ConfluenceReference]]:
+        """Phase 1 + Phase 2 for one topic: intent -> CQL search -> extraction.
+
+        Returns (all_jira_keys_found, {key: first_reference}).
+        """
+        assert self._intent_analyser is not None
+        assert self._confluence is not None
+        assert self._context_extractor is not None
+
+        intent = await self._intent_analyser.analyse(topic.suggested_query)
+        if intent.intent_type == "general" or not intent.confluence_keywords:
+            return [], {}
+
+        pages = await self._confluence.search_pages_multi(
+            intent, spaces, recency_days=self._settings.confluence.recency_days
+        )
+        pages = pages[: self._settings.confluence.max_pages_total]
+        if not pages:
+            return [], {}
+
+        # Item 4: _fetch_and_extract returns values - no closure mutation.
+        # asyncio.gather() propagates contextvars automatically into subtasks (Python copies
+        # context on coroutine spawn). If asyncio.create_task() is ever used instead,
+        # pass context=contextvars.copy_context() explicitly.
+        results = await asyncio.gather(
+            *(
+                _fetch_and_extract(
+                    page,
+                    self._confluence,
+                    self._context_extractor,
+                    self._confluence_sem,
+                )
+                for page in pages
+            ),
+            return_exceptions=True,
+        )
+
+        all_keys: list[str] = []
+        page_refs: dict[str, ConfluenceReference] = {}
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("confluence_page_extraction_failed", error=str(result))
+                continue
+            keys, refs = result
+            all_keys.extend(keys)
+            for key, ref in refs.items():
+                if key not in page_refs:  # first page wins per topic
+                    page_refs[key] = ref
+
+        return all_keys, page_refs
 
     async def get_briefing_report(self, report_id: str, session_id: str) -> ReportResponse:
         """Read a stored briefing report by ID. Returns sections from the JSON sidecar.
@@ -251,12 +442,84 @@ class BriefingOrchestrator:
             view_url=view_url,
         )
 
+    async def search_context(
+        self,
+        query: str,
+        spaces: list[str] | None = None,
+        recency_days: int | None = None,
+        limit: int = 5,
+    ) -> "ConfluenceContextResponse":
+        """Search Confluence for context relevant to the given query.
+
+        Returns an empty ConfluenceContextResponse when Confluence is not configured.
+        Reuses the instance-level semaphore to bound concurrent page fetches.
+        """
+        from confluence.client.cql_builder import build_cql_variants
+        from confluence.models.extraction import ContextExtractionOutput, ContextSearchResult
+        from confluence.models.response import ConfluenceContextResponse
+
+        if (
+            self._confluence is None
+            or self._intent_analyser is None
+            or self._context_extractor is None
+        ):
+            return ConfluenceContextResponse()
+
+        resolved_spaces = spaces or self._settings.confluence.default_spaces
+        _recency = (
+            recency_days if recency_days is not None else self._settings.confluence.recency_days
+        )
+
+        intent = await self._intent_analyser.analyse(query)
+        pages = await self._confluence.search_pages_multi(intent, resolved_spaces, _recency)
+        pages = pages[:limit]
+
+        variants = build_cql_variants(intent, resolved_spaces, _recency)
+
+        # Concurrent fetch+extract bounded by the shared instance semaphore.
+        extractor = self._context_extractor
+        confluence = self._confluence
+        sem = self._confluence_sem
+
+        async def _fetch_one(p: "ConfluencePage") -> ContextExtractionOutput:
+            async with sem:
+                secs = await confluence.get_page_sections(p.page_id, _TARGET_HEADINGS)
+                return await extractor.extract(p, secs)
+
+        gather_results = await asyncio.gather(
+            *(_fetch_one(p) for p in pages),
+            return_exceptions=True,
+        )
+
+        results: list[ContextSearchResult] = []
+        errors: list[str] = []
+        for page, gr in zip(pages, gather_results, strict=False):
+            if isinstance(gr, BaseException):
+                errors.append(f"page {page.page_id}: {gr}")
+                continue
+            results.append(
+                ContextSearchResult(
+                    page=page,
+                    jira_keys_mentioned=gr.jira_keys_mentioned,
+                    extracted_mitigations=gr.action_items,
+                    extracted_owners=gr.mitigation_owners,
+                )
+            )
+
+        return ConfluenceContextResponse(
+            results=results,
+            total_pages_found=len(pages),
+            cql_used=variants.as_list(),
+            errors=errors,
+        )
+
     async def _build_sections(
         self,
         topics: list[AgendaTopic],
         completed: dict[str, QueryResponse],
         errors: list[str],
         log: structlog.stdlib.BoundLogger,
+        confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
     ) -> list[BriefingSection]:
         all_keys: list[str] = []
         summaries: dict[str, str] = {}
@@ -316,7 +579,12 @@ class BriefingOrchestrator:
         analyses: list[BlockerAnalysis] = []
         if all_keys:
             try:
-                analyses = await self._analyser.analyse(issue_details, all_keys, summaries or None)
+                analyses = await self._analyser.analyse(
+                    issue_details,
+                    all_keys,
+                    summaries or None,
+                    confluence_refs or None,
+                )
             except AnalysisError as exc:
                 errors.append(f"issue analysis failed: {exc}")
                 log.error("issue_analysis_failed", error=str(exc))
@@ -364,6 +632,54 @@ def _make_report_id(session_id: str) -> str:
 
 
 _REPORT_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_-]{0,127}$")
+
+
+_TARGET_HEADINGS = [
+    "At Risk", "Blocked", "Blocker", "Mitigation", "Action Items",
+    "Actions", "Risk", "Escalation", "Open Items", "Status",
+]
+
+
+async def _fetch_and_extract(
+    page: "ConfluencePage",
+    confluence: "ConfluenceClientProtocol",
+    extractor: "ContextExtractor",
+    sem: asyncio.Semaphore,
+) -> tuple[list[str], dict[str, ConfluenceReference]]:
+    """Item 4: fetch page sections + run LLM extraction; returns values (no closure mutation).
+
+    Acquires sem once - no nested semaphore acquisition. Single-threaded merge
+    post-gather eliminates the non-atomic read-check-write race on confluence_refs.
+    """
+    async with sem:
+        sections = await confluence.get_page_sections(page.page_id, _TARGET_HEADINGS)
+        extraction = await extractor.extract(page, sections)
+
+    page_refs: dict[str, ConfluenceReference] = {
+        key: ConfluenceReference(
+            page_id=page.page_id,
+            page_title=page.title,
+            cql_excerpt=page.cql_excerpt,
+            relevant_passage=_extract_relevant_passage(extraction, key),
+        )
+        for key in extraction.jira_keys_mentioned
+    }
+    return extraction.jira_keys_mentioned, page_refs
+
+
+def _extract_relevant_passage(extraction: "ContextExtractionOutput", key: str) -> str:
+    """Find the most relevant passage for a specific issue key from extraction output."""
+    # Use the first action item that mentions the key, otherwise severity signals.
+    for item in extraction.action_items:
+        if key in item:
+            return item[:300]
+    for signal in extraction.severity_signals:
+        if key in signal:
+            return signal[:300]
+    # Fallback: summarise what was found.
+    if extraction.action_items:
+        return extraction.action_items[0][:300]
+    return ""
 
 
 def _is_safe_report_id(report_id: str) -> bool:

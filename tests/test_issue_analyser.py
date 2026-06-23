@@ -10,6 +10,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from config.settings import AnalysisSettings
+from confluence.models.reference import ConfluenceReference
 from core.issue_analyser import IssueAnalyser, _compute_days_blocked, build_issue_analyser
 from models.lite import (
     ChangelogEntry,
@@ -222,9 +223,11 @@ async def test_analyse_cache_hit_skips_second_llm_call(monkeypatch: pytest.Monke
     # Track calls by monkeypatching _analyse_one
     original = analyser._analyse_one
 
-    async def counting_analyse_one(issue: IssueDetail, summaries: dict[str, str] | None) -> object:
+    async def counting_analyse_one(
+        issue: IssueDetail, summaries: dict[str, str] | None, refs: list[ConfluenceReference]
+    ) -> object:
         call_count["n"] += 1
-        return await original(issue, summaries)
+        return await original(issue, summaries, refs)
 
     monkeypatch.setattr(analyser, "_analyse_one", counting_analyse_one)
 

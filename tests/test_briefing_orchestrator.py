@@ -6,6 +6,7 @@ from typing import Any
 
 from briefings.delivery import BaseDeliveryChannel
 from config.settings import Settings
+from confluence.models.reference import ConfluenceReference
 from core.briefing_orchestrator import BriefingOrchestrator
 from core.exceptions import DecompositionError, LiteBackendError
 from core.report_synthesiser import ReportSynthesiser
@@ -108,6 +109,7 @@ class FakeAnalyser:
         issue_details: IssueDetailsResponse,
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
+        confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
     ) -> list[BlockerAnalysis]:
         return self._analyses
 

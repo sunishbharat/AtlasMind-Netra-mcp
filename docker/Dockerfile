@@ -18,7 +18,7 @@ ENV UV_LINK_MODE=copy \
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --no-build
 
 # -- Stage 3: final runtime image ---------------------------------------------
 FROM python:3.12-slim AS final
@@ -41,6 +41,7 @@ COPY server.py    ./
 COPY config/      ./config/
 COPY core/        ./core/
 COPY briefings/   ./briefings/
+COPY confluence/  ./confluence/
 COPY memory/      ./memory/
 COPY models/      ./models/
 COPY prompts/     ./prompts/

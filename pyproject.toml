@@ -16,6 +16,8 @@ dependencies = [
     "valkey[asyncio]>=6.1.1",
     "markdown>=3.10.2",
     "types-markdown>=3.10.2.20260518",
+    "atlassian-python-api>=4.0.7",
+    "cachetools>=7.1.4",
 ]
 
 [dependency-groups]
@@ -25,6 +27,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "freezegun>=1.5.5",
 ]
 
 [tool.uv]
@@ -51,7 +54,7 @@ select = [
 strict = true
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
-files = ["server.py", "core", "memory", "models", "config", "briefings", "tests"]
+files = ["server.py", "core", "memory", "models", "config", "briefings", "confluence", "tests"]
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

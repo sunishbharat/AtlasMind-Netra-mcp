@@ -101,5 +101,14 @@
       "project_filter": "project in (PROJECT_KEYS)",
       "all": "project is not EMPTY"
     }
+  },
+  "release": {
+    "ambiguity": "No release version specified; cannot generate JQL without a fix version",
+    "questions": [
+      "Which release version are you asking about? (e.g. R1.0, ACME_R1.0, a sprint name)"
+    ],
+    "jql_patterns": {
+      "fix_version": "fixVersion = \"{version}\""
+    }
   }
 }

@@ -7,18 +7,21 @@ nowhere else (dependency injection). Four MCP tools are exposed.
 import asyncio
 import logging
 import re
+import uuid
 from pathlib import Path
 
 import httpx
 import structlog
+import structlog.contextvars
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic_ai.models import Model
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
-from pydantic_ai.models import Model
 
 from briefings.delivery import build_delivery_channel
 from config.settings import LogSettings, Settings
+from confluence.models.response import ConfluenceContextResponse
 from core.agenda_decomposer import load_agenda_decomposer
 from core.atlasmind_lite_client import AtlasMindLiteClient
 from core.briefing_orchestrator import BriefingHandler, BriefingOrchestrator
@@ -29,8 +32,8 @@ from core.issue_analyser import build_issue_analyser
 from core.jira_fields_loader import JiraFieldsLoader
 from core.llm_provider import create_llm_provider
 from core.orchestrator import ElicitFn, Orchestrator, QueryHandler
-from core.report_renderer import ReportRenderer
 from core.ranking_engine import RankingEngine, load_ranking_rule
+from core.report_renderer import ReportRenderer
 from core.report_synthesiser import ReportSynthesiser
 from core.vocab_lookup import VocabLookup
 from memory.briefing_session_store import BaseBriefingSessionStore, InMemoryBriefingSessionStore
@@ -161,6 +164,34 @@ def build_briefing_orchestrator(
         lite_client = AtlasMindLiteClient(http, settings.lite)
     _model = llm_model if llm_model is not None else create_llm_provider(settings.llm).make_model()
     rule = load_ranking_rule(settings.analysis.ranking_rule_path)
+
+    intent_analyser = None
+    confluence_client = None
+    context_extractor = None
+    if settings.confluence.base_url and settings.confluence.api_token:
+        from confluence.client.client import ConfluenceClient
+        from confluence.extraction.extractor import build_context_extractor
+        from core.query_intent_analyser import build_query_intent_analyser
+        intent_analyser = build_query_intent_analyser(
+            _model, settings.confluence, retries=settings.llm.retries
+        )
+        confluence_client = ConfluenceClient(
+            base_url=settings.confluence.base_url,
+            api_token=settings.confluence.api_token.get_secret_value(),
+            email=settings.confluence.email,
+            search_limit=settings.confluence.search_limit,
+            page_cache_ttl_seconds=settings.confluence.page_cache_ttl_seconds,
+            content_max_chars=settings.confluence.content_max_chars,
+        )
+        context_extractor = build_context_extractor(
+            _model, settings.confluence, retries=settings.llm.retries
+        )
+        logger.info(
+            "confluence_enabled",
+            base_url=settings.confluence.base_url,
+            default_spaces=settings.confluence.default_spaces,
+        )
+
     return BriefingOrchestrator(
         decomposer=load_agenda_decomposer(
             _model,
@@ -179,6 +210,9 @@ def build_briefing_orchestrator(
         briefing_sessions=briefing_session_store
         or InMemoryBriefingSessionStore(ttl_seconds=settings.session.ttl_seconds),
         settings=settings,
+        intent_analyser=intent_analyser,
+        confluence=confluence_client,
+        context_extractor=context_extractor,
     )
 
 
@@ -278,6 +312,14 @@ def create_server(
         queries, and writes a SINGLE combined .md report with per-issue analysis and ranked
         blockers.
         """
+        # Item 3: per-invocation log correlation; prevents context leak between requests.
+        # contextvars propagate automatically into asyncio.gather() subtasks.
+        # TODO M4: bind user_id once per-user token extraction is implemented.
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=str(uuid.uuid4()),
+            session_id=session_id,
+        )
         _is_stateless = settings.server.transport == "streamable-http"
         elicit = _make_elicit(ctx) if (ctx is not None and not _is_stateless) else None
         return await orch.handle_query(
@@ -311,6 +353,11 @@ def create_server(
 
         template_id is reserved for future briefing templates and has no effect yet.
         """
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=str(uuid.uuid4()),
+            session_id=session_id,
+        )
         _is_stateless = settings.server.transport == "streamable-http"
         elicit = _make_elicit(ctx) if (ctx is not None and not _is_stateless) else None
         return await briefing_orch.generate_briefing(
@@ -328,6 +375,11 @@ def create_server(
         Rendering and export (PNG/PDF/clipboard) happen in AtlasMind-frontendUI at the
         view_url - this tool never returns rendered binaries.
         """
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=str(uuid.uuid4()),
+            session_id=session_id,
+        )
         try:
             return await briefing_orch.get_briefing_report(report_id, session_id)
         except ValueError as exc:
@@ -338,10 +390,38 @@ def create_server(
             )
 
     @mcp.tool
+    async def search_context(
+        query: str,
+        session_id: str,
+        spaces: list[str] | None = None,
+        recency_days: int | None = 30,
+        limit: int = 5,
+    ) -> ConfluenceContextResponse:
+        """Search Confluence for pages relevant to a release version, risk topic, or keyword.
+
+        Returns matching pages with Jira issue key mentions, mitigation text, and severity
+        signals extracted by LLM. Use for direct Confluence investigation or to find
+        relevant context before running generate_briefing.
+
+        generate_briefing also calls this internally when NETRA_CONFLUENCE__BASE_URL is
+        configured - you do not need to call it manually before generate_briefing.
+
+        Returns empty result (no error) if Confluence is not configured.
+        """
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=str(uuid.uuid4()),
+            session_id=session_id,
+        )
+        return await briefing_orch.search_context(query, spaces, recency_days, limit)
+
+    @mcp.tool
     async def get_jira_context(
         include_fields: bool = True, include_projects: bool = True
     ) -> JiraContextResponse:
         """Jira instance metadata: projects, fields, priorities, issue types."""
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=str(uuid.uuid4()))
         raise ToolError("get_jira_context is not implemented.")
 
     @mcp.custom_route("/health", methods=["GET"])
@@ -403,7 +483,12 @@ def _fetch_fields_files(settings: Settings) -> None:
     clr = settings.clarification
     targets = [
         (clr.jira_fields_url, clr.jira_fields_path, "jira_fields.json", "jira_fields_path"),
-        (clr.allowed_values_url, clr.allowed_values_path, "jira_allowed_values.json", "allowed_values_path"),
+        (
+            clr.allowed_values_url,
+            clr.allowed_values_path,
+            "jira_allowed_values.json",
+            "allowed_values_path",
+        ),
     ]
     for url, existing_path, filename, attr in targets:
         if url and existing_path is None:

@@ -5,6 +5,7 @@ parsed. PydanticAI failures are translated to ClarificationError at this boundar
 """
 
 from pathlib import Path
+from typing import cast
 
 import structlog
 from pydantic_ai import Agent
@@ -32,19 +33,25 @@ class Clarifier:
             system_prompt = prompt_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConfigError(f"{prompt_path}: cannot read clarification prompt: {exc}") from exc
-        self._question_agent = Agent(
+        self._question_agent = Agent(  # type: ignore[call-overload]
             model,
             output_type=ClarificationNeeded,
             system_prompt=system_prompt,
             retries=retries,
-            model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
+            model_settings={
+                "bedrock_cache_instructions": True,
+                "anthropic_cache_instructions": True,
+            },
         )
-        self._resolve_agent = Agent(
+        self._resolve_agent = Agent(  # type: ignore[call-overload]
             model,
             output_type=ResolvedTerms,
             system_prompt=system_prompt,
             retries=retries,
-            model_settings={"bedrock_cache_instructions": True, "anthropic_cache_instructions": True},
+            model_settings={
+                "bedrock_cache_instructions": True,
+                "anthropic_cache_instructions": True,
+            },
         )
 
     async def formulate_question(
@@ -72,7 +79,7 @@ class Clarifier:
             result = await self._question_agent.run(prompt)
         except (AgentRunError, UserError) as exc:
             raise ClarificationError(f"failed to formulate question: {exc}") from exc
-        return result.output
+        return cast(ClarificationNeeded, result.output)
 
     async def resolve_answer(
         self,
@@ -97,7 +104,7 @@ class Clarifier:
             result = await self._resolve_agent.run(prompt)
         except (AgentRunError, UserError) as exc:
             raise ClarificationError(f"failed to resolve answer: {exc}") from exc
-        return result.output
+        return cast(ResolvedTerms, result.output)
 
 
 def _fields_block(fields: list[JiraField]) -> str:

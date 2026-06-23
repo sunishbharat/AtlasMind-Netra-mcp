@@ -5,20 +5,17 @@ Uses a FakeValkey client that intercepts calls so tests run without a live valke
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 from memory.session_store import SessionState
 from memory.valkey_stores import (
-    ValkeyBriefingSessionStore,
-    ValkeySessionStore,
     _BRIEFING_PREFIX,
     _SESSION_PREFIX,
+    ValkeyBriefingSessionStore,
+    ValkeySessionStore,
     make_valkey_client,
 )
-
 
 # ---------------------------------------------------------------------------
 # FakeValkey: interceptor that records calls and returns programmed responses
@@ -41,7 +38,7 @@ class FakeValkey:
     async def get(self, key: str) -> str | None:
         self.calls.append(("get", (key,), {}))
         if key in self.return_values:
-            return self.return_values.pop(key)
+            return cast("str | None", self.return_values.pop(key))
         return self.storage.get(key)
 
     async def setex(self, key: str, ttl: int, value: str) -> None:
@@ -60,10 +57,11 @@ class FakeValkey:
 
 def test_make_valkey_client_with_password() -> None:
     """make_valkey_client wires url and password into Valkey.from_url."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
+
+    from pydantic import SecretStr
 
     from config.settings import ValkeySettings
-    from pydantic import SecretStr
 
     settings = ValkeySettings(url="valkey://localhost:6379/0", password=SecretStr("secret"))
     fake_valkey = MagicMock()
@@ -80,7 +78,7 @@ def test_make_valkey_client_with_password() -> None:
 
 def test_make_valkey_client_without_password() -> None:
     """make_valkey_client works when password is None."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import patch
 
     from config.settings import ValkeySettings
 
@@ -105,7 +103,7 @@ def test_make_valkey_client_without_password() -> None:
 async def test_session_store_set_and_get_roundtrip() -> None:
     """set() stores JSON with TTL; get() retrieves and deserialises it."""
     fake = FakeValkey()
-    store = ValkeySessionStore(fake, ttl_seconds=120)
+    store = ValkeySessionStore(fake, ttl_seconds=120)  # type: ignore[arg-type]
 
     session = SessionState(session_id="s1", pending_query="show blockers")
     await store.set(session)
@@ -130,7 +128,7 @@ async def test_session_store_set_and_get_roundtrip() -> None:
 async def test_session_store_get_unknown_returns_none() -> None:
     """get() with an unknown session_id returns None."""
     fake = FakeValkey()
-    store = ValkeySessionStore(fake, ttl_seconds=60)
+    store = ValkeySessionStore(fake, ttl_seconds=60)  # type: ignore[arg-type]
     result = await store.get("does-not-exist")
     assert result is None
     get_call = fake.calls[0]
@@ -142,7 +140,7 @@ async def test_session_store_delete_calls_client_delete() -> None:
     """delete() removes the key from valkey."""
     fake = FakeValkey()
     fake.storage[f"{_SESSION_PREFIX}s1"] = '{"session_id":"s1"}'
-    store = ValkeySessionStore(fake, ttl_seconds=60)
+    store = ValkeySessionStore(fake, ttl_seconds=60)  # type: ignore[arg-type]
 
     await store.delete("s1")
 
@@ -153,7 +151,7 @@ async def test_session_store_delete_calls_client_delete() -> None:
 async def test_session_store_delete_idempotent() -> None:
     """delete() on a non-existent key does not raise."""
     fake = FakeValkey()
-    store = ValkeySessionStore(fake, ttl_seconds=60)
+    store = ValkeySessionStore(fake, ttl_seconds=60)  # type: ignore[arg-type]
     await store.delete("never-existed")  # must not raise
 
 
@@ -168,7 +166,7 @@ async def test_briefing_store_set_and_get_roundtrip() -> None:
     from models.responses import AgendaTopic
 
     fake = FakeValkey()
-    store = ValkeyBriefingSessionStore(fake, ttl_seconds=300)
+    store = ValkeyBriefingSessionStore(fake, ttl_seconds=300)  # type: ignore[arg-type]
 
     state = BriefingPendingState(
         session_id="b1",
@@ -202,7 +200,7 @@ async def test_briefing_store_set_and_get_roundtrip() -> None:
 async def test_briefing_store_get_unknown_returns_none() -> None:
     """get() with an unknown session_id returns None."""
     fake = FakeValkey()
-    store = ValkeyBriefingSessionStore(fake, ttl_seconds=60)
+    store = ValkeyBriefingSessionStore(fake, ttl_seconds=60)  # type: ignore[arg-type]
     result = await store.get("no-such-briefing")
     assert result is None
 
@@ -210,7 +208,6 @@ async def test_briefing_store_get_unknown_returns_none() -> None:
 async def test_briefing_store_delete_calls_client_delete() -> None:
     """delete() removes the briefing key."""
     from memory.briefing_session_store import BriefingPendingState
-    from models.responses import AgendaTopic
 
     fake = FakeValkey()
     fake.storage[f"{_BRIEFING_PREFIX}b1"] = BriefingPendingState(
@@ -218,7 +215,7 @@ async def test_briefing_store_delete_calls_client_delete() -> None:
         agenda_text="x",
         topics=[],
     ).model_dump_json()
-    store = ValkeyBriefingSessionStore(fake, ttl_seconds=60)
+    store = ValkeyBriefingSessionStore(fake, ttl_seconds=60)  # type: ignore[arg-type]
 
     await store.delete("b1")
 

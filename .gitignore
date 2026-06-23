@@ -3,6 +3,7 @@ docs/
 *.md
 !README.md
 !prompts/*.md
+!confluence/prompts/*.md
 
 # Python
 __pycache__/
@@ -18,8 +19,9 @@ htmlcov/
 !.dockerignore
 !CONTRIBUTING.md
 
-# Runtime data (learned conventions, caches)
+# Runtime data (learned conventions, caches, session-sharded convention files)
 data/
+data/conventions/
 
 # CF static-file server directory (generated locally; not committed)
 netra-fields-server/

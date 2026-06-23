@@ -39,6 +39,7 @@ class IssueAnalyserPort(Protocol):
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
         confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
+        force_refresh: bool = False,
     ) -> list[BlockerAnalysis]: ...
 
 
@@ -74,6 +75,7 @@ class IssueAnalyser:
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
         confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
+        force_refresh: bool = False,
     ) -> list[BlockerAnalysis]:
         """Analyse each key from the pre-fetched IssueDetailsResponse.
 
@@ -87,13 +89,14 @@ class IssueAnalyser:
 
         Keys not present in `issue_details.issues` produce a degraded BlockerAnalysis
         (days_blocked=0, empty AI fields) - partial failure is a designed state.
+        force_refresh bypasses the analysis cache; always writes back after fetching.
         """
         issue_map = {d.key: d for d in issue_details.issues}
         _refs = confluence_refs or {}
 
         async def bounded(key: str) -> BlockerAnalysis:
             async with self._semaphore:
-                return await self._analyse_key(key, issue_map, summaries, _refs)
+                return await self._analyse_key(key, issue_map, summaries, _refs, force_refresh)
 
         tasks = [bounded(key) for key in issue_keys]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -117,6 +120,7 @@ class IssueAnalyser:
         issue_map: dict[str, IssueDetail],
         summaries: dict[str, str] | None,
         confluence_refs: dict[str, list[ConfluenceReference]],
+        force_refresh: bool = False,
     ) -> BlockerAnalysis:
         issue = issue_map.get(key)
         if issue is None:
@@ -125,7 +129,7 @@ class IssueAnalyser:
 
         cache_ts = issue.changelog[-1].timestamp if issue.changelog else ""
         cache_key = (key, cache_ts)
-        if cache_key in self._cache:
+        if not force_refresh and cache_key in self._cache:
             cached = self._cache[cache_key]
             # Re-attach current confluence_refs (may have been enriched after caching).
             refs = confluence_refs.get(key, [])

@@ -104,6 +104,8 @@ class ConfluenceClient:
         self._content_max_chars = content_max_chars
 
         # TODO M4 AUTH: see module docstring before changing cache key.
+        # Cache stores raw HTML (not stripped plain text) so extract_sections can
+        # find heading tags. strip_html is applied per-section inside extract_sections.
         self._page_cache: TTLCache[str, str] = TTLCache(
             maxsize=200, ttl=page_cache_ttl_seconds
         )
@@ -156,26 +158,70 @@ class ConfluenceClient:
         self,
         page_id: str,
         target_headings: list[str],
+        force_refresh: bool = False,
     ) -> dict[str, str]:
         """Fetch page body and return extracted plain-text sections by heading.
 
         Uses double-checked locking to prevent concurrent duplicate fetches for
         the same page_id. Cache hit path acquires no lock.
+        force_refresh skips the cache read but always writes back after fetching.
         """
-        if page_id in self._page_cache:
+        if not force_refresh and page_id in self._page_cache:
             return extract_sections(
                 self._page_cache[page_id], target_headings, self._content_max_chars
             )
 
         async with self._page_fetch_locks[page_id]:
-            if page_id in self._page_cache:
+            if not force_refresh and page_id in self._page_cache:
                 return extract_sections(
                     self._page_cache[page_id], target_headings, self._content_max_chars
                 )
-            plain_text = await self._fetch_page_text(page_id)
-            self._page_cache[page_id] = plain_text
+            html = await self._fetch_page_html(page_id)
+            self._page_cache[page_id] = html
 
-        return extract_sections(plain_text, target_headings, self._content_max_chars)
+        return extract_sections(html, target_headings, self._content_max_chars)
+
+    async def fetch_page_metadata(
+        self,
+        page_id: str,
+        source_url: str,
+        force_refresh: bool = False,
+    ) -> ConfluencePage:
+        """Fetch page metadata + body in one API call; populates _page_cache for get_page_sections.
+
+        Args:
+            page_id: Numeric Confluence page ID.
+            source_url: Original URL provided by the caller; stored in ConfluencePage.url.
+            force_refresh: Skip TTLCache read; still writes back after fetching.
+
+        Returns:
+            ConfluencePage with title, space_key, last_modified, and url populated.
+        """
+        async with self._page_fetch_locks[page_id]:
+            raw: dict[str, Any] = {}
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self._max_retries),
+                wait=wait_exponential_jitter(initial=1, max=10),
+                retry=retry_if_exception_type(_RETRYABLE),
+                reraise=True,
+            ):
+                with attempt:
+                    raw = await asyncio.to_thread(
+                        self._confluence.get_page_by_id,
+                        page_id,
+                        expand="body.view,space,version",
+                    )
+        # Always write raw HTML to cache - fresh data just fetched should replace stale.
+        html: str = raw.get("body", {}).get("view", {}).get("value", "")
+        self._page_cache[page_id] = html
+        return ConfluencePage(
+            page_id=str(raw["id"]),
+            title=str(raw.get("title", "")),
+            space_key=str((raw.get("space") or {}).get("key", "")),
+            url=source_url,
+            last_modified=str((raw.get("version") or {}).get("when", "")),
+            cql_excerpt="",
+        )
 
     async def find_pages_mentioning_keys(
         self,
@@ -248,8 +294,12 @@ class ConfluenceClient:
         logger.debug("confluence_variant_result", variant=variant_name, count=len(pages))
         return pages
 
-    async def _fetch_page_text(self, page_id: str) -> str:
-        """Fetch body.view HTML and return stripped plain text."""
+    async def _fetch_page_html(self, page_id: str) -> str:
+        """Fetch body.view HTML and return raw HTML content for caching.
+
+        Returns raw HTML so extract_sections can locate heading tags.
+        strip_html is applied per-section inside extract_sections, not here.
+        """
         retrying = AsyncRetrying(
             stop=stop_after_attempt(self._max_retries),
             wait=wait_exponential_jitter(initial=1, max=10),
@@ -265,9 +315,7 @@ class ConfluenceClient:
                     expand="body.view",
                 )
 
-        html: str = raw.get("body", {}).get("view", {}).get("value", "")
-        from confluence.client.html_extractor import strip_html
-        return strip_html(html)
+        return str(raw.get("body", {}).get("view", {}).get("value", ""))
 
 
 # ---------------------------------------------------------------------------

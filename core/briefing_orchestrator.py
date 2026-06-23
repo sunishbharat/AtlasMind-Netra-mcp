@@ -76,6 +76,7 @@ class BriefingHandler(Protocol):
         projects: list[str] | None = None,
         clarification_answer: str | None = None,
         elicit: ElicitFn | None = None,
+        force_refresh: bool = False,
     ) -> BriefingResponse: ...
 
     async def get_briefing_report(self, report_id: str, session_id: str) -> ReportResponse: ...
@@ -86,6 +87,9 @@ class BriefingHandler(Protocol):
         spaces: list[str] | None = None,
         recency_days: int | None = None,
         limit: int = 5,
+        *,
+        force_refresh: bool = False,
+        page_urls: list[str] | None = None,
     ) -> "ConfluenceContextResponse": ...
 
 
@@ -135,6 +139,7 @@ class BriefingOrchestrator:
         projects: list[str] | None = None,
         clarification_answer: str | None = None,
         elicit: ElicitFn | None = None,
+        force_refresh: bool = False,
     ) -> BriefingResponse:
         log = logger.bind(session_id=session_id)
         errors: list[str] = []
@@ -221,12 +226,14 @@ class BriefingOrchestrator:
                             all_jira_keys.append(str(key))
             try:
                 confluence_refs = await self._run_confluence_research(
-                    topics, completed, all_jira_keys, spaces=None
+                    topics, completed, all_jira_keys, spaces=None, force_refresh=force_refresh
                 )
             except Exception as exc:
                 log.warning("confluence_research_failed", error=str(exc))
 
-        sections = await self._build_sections(topics, completed, errors, log, confluence_refs)
+        sections = await self._build_sections(
+            topics, completed, errors, log, confluence_refs, force_refresh
+        )
         report_id = _make_report_id(session_id)
 
         content = self._synthesiser.build_briefing_report(
@@ -275,6 +282,7 @@ class BriefingOrchestrator:
         completed: dict[str, QueryResponse],
         all_jira_keys: list[str],
         spaces: list[str] | None = None,  # Item 7: per-call override
+        force_refresh: bool = False,
     ) -> dict[str, list[ConfluenceReference]]:
         """Run Phase 1 (intent) + Phase 2 (Confluence search/extraction) for all topics.
 
@@ -291,7 +299,7 @@ class BriefingOrchestrator:
 
         # Per-topic Phase 1 + Phase 2 in parallel (bounded by _confluence_sem in _fetch_and_extract)
         topic_tasks = [
-            self._research_topic(topic, resolved_spaces)
+            self._research_topic(topic, resolved_spaces, force_refresh)
             for topic in topics
             if self._intent_analyser is not None
         ]
@@ -343,6 +351,7 @@ class BriefingOrchestrator:
         self,
         topic: AgendaTopic,
         spaces: list[str],
+        force_refresh: bool = False,
     ) -> tuple[list[str], dict[str, ConfluenceReference]]:
         """Phase 1 + Phase 2 for one topic: intent -> CQL search -> extraction.
 
@@ -374,6 +383,7 @@ class BriefingOrchestrator:
                     self._confluence,
                     self._context_extractor,
                     self._confluence_sem,
+                    force_refresh,
                 )
                 for page in pages
             ),
@@ -448,14 +458,26 @@ class BriefingOrchestrator:
         spaces: list[str] | None = None,
         recency_days: int | None = None,
         limit: int = 5,
+        *,
+        force_refresh: bool = False,
+        page_urls: list[str] | None = None,
     ) -> "ConfluenceContextResponse":
         """Search Confluence for context relevant to the given query.
 
         Returns an empty ConfluenceContextResponse when Confluence is not configured.
         Reuses the instance-level semaphore to bound concurrent page fetches.
+
+        force_refresh bypasses all L2 cache reads; always writes back after fetching.
+        page_urls: Specific Confluence page URLs to include alongside the keyword search.
+          Supports Cloud (.../pages/{id}/...) and Server viewpage (?pageId={id}) formats.
+          Unrecognized URL formats are reported in the errors list and skipped gracefully.
+          Pinned pages consume from the limit budget first. If len(page_urls) >= limit,
+          no CQL keyword-search results are included in the response.
         """
         from confluence.client.cql_builder import build_cql_variants
+        from confluence.client.url_parser import extract_page_id as _extract_id
         from confluence.models.extraction import ContextExtractionOutput, ContextSearchResult
+        from confluence.models.page import ConfluencePage
         from confluence.models.response import ConfluenceContextResponse
 
         if (
@@ -465,51 +487,91 @@ class BriefingOrchestrator:
         ):
             return ConfluenceContextResponse()
 
+        # errors declared here - single list shared by all blocks in this method.
+        errors: list[str] = []
+
         resolved_spaces = spaces or self._settings.confluence.default_spaces
         _recency = (
             recency_days if recency_days is not None else self._settings.confluence.recency_days
         )
 
-        intent = await self._intent_analyser.analyse(query)
-        pages = await self._confluence.search_pages_multi(intent, resolved_spaces, _recency)
-        pages = pages[:limit]
+        # Step 1: Parse page_urls cheaply (no network) to decide whether CQL is needed.
+        # valid_ids is a list of (source_url, page_id) for URLs we can resolve.
+        # Deduplicate by page_id so the same page is not fetched twice.
+        valid_ids: list[tuple[str, str]] = []
+        _seen_pin_ids: set[str] = set()
+        if page_urls:
+            for url in page_urls:
+                pid = _extract_id(url)
+                if pid is None:
+                    errors.append(f"cannot extract page ID from URL: {url!r}")
+                elif pid not in _seen_pin_ids:
+                    _seen_pin_ids.add(pid)
+                    valid_ids.append((url, pid))
 
-        variants = build_cql_variants(intent, resolved_spaces, _recency)
-
-        # Concurrent fetch+extract bounded by the shared instance semaphore.
+        # Step 2: CQL search - skip entirely when pinned pages already fill the budget.
+        # Avoids one LLM intent call + 3 Confluence API calls when the result set
+        # would be fully displaced by user-pinned pages.
         extractor = self._context_extractor
         confluence = self._confluence
         sem = self._confluence_sem
+        cql_pages: list[ConfluencePage] = []
+        cql_used: list[str] = []
+        if len(valid_ids) < limit:
+            intent = await self._intent_analyser.analyse(query)
+            cql_pages = await confluence.search_pages_multi(intent, resolved_spaces, _recency)
+            cql_pages = cql_pages[:limit]
+            cql_used = build_cql_variants(intent, resolved_spaces, _recency).as_list()
 
+        # Step 3: Fetch pinned pages in parallel (confluence is not None - checked above).
+        pin_results = await asyncio.gather(
+            *(confluence.fetch_page_metadata(pid, url, force_refresh) for url, pid in valid_ids),
+            return_exceptions=True,
+        )
+        pinned_pages: list[ConfluencePage] = []
+        for (url, _pid), result in zip(valid_ids, pin_results, strict=False):
+            if isinstance(result, ConfluencePage):
+                pinned_pages.append(result)
+            elif isinstance(result, Exception):  # not BaseException - CancelledError skipped
+                errors.append(f"failed to fetch pinned page {url!r}: {result}")
+
+        # Merge: pinned pages first, then CQL results (deduped by page_id).
+        # If len(valid_ids) >= limit, CQL results are fully displaced - this is intentional:
+        # user-expressed intent fills the budget before keyword search results.
+        seen_ids: set[str] = {p.page_id for p in pinned_pages}
+        all_pages = (pinned_pages + [p for p in cql_pages if p.page_id not in seen_ids])[:limit]
+
+        # Step 4: Fetch+extract all merged pages concurrently.
         async def _fetch_one(p: "ConfluencePage") -> ContextExtractionOutput:
             async with sem:
-                secs = await confluence.get_page_sections(p.page_id, _TARGET_HEADINGS)
-                return await extractor.extract(p, secs)
+                secs = await confluence.get_page_sections(
+                    p.page_id, _TARGET_HEADINGS, force_refresh
+                )
+                return await extractor.extract(p, secs, force_refresh)
 
         gather_results = await asyncio.gather(
-            *(_fetch_one(p) for p in pages),
+            *(_fetch_one(p) for p in all_pages),
             return_exceptions=True,
         )
 
         results: list[ContextSearchResult] = []
-        errors: list[str] = []
-        for page, gr in zip(pages, gather_results, strict=False):
-            if isinstance(gr, BaseException):
-                errors.append(f"page {page.page_id}: {gr}")
-                continue
-            results.append(
-                ContextSearchResult(
-                    page=page,
-                    jira_keys_mentioned=gr.jira_keys_mentioned,
-                    extracted_mitigations=gr.action_items,
-                    extracted_owners=gr.mitigation_owners,
+        for page, gr in zip(all_pages, gather_results, strict=False):
+            if isinstance(gr, ContextExtractionOutput):
+                results.append(
+                    ContextSearchResult(
+                        page=page,
+                        jira_keys_mentioned=gr.jira_keys_mentioned,
+                        extracted_mitigations=gr.action_items,
+                        extracted_owners=gr.mitigation_owners,
+                    )
                 )
-            )
+            elif isinstance(gr, Exception):  # not BaseException - CancelledError skipped silently
+                errors.append(f"page {page.page_id}: {gr}")
 
         return ConfluenceContextResponse(
             results=results,
-            total_pages_found=len(pages),
-            cql_used=variants.as_list(),
+            total_pages_found=len(all_pages),
+            cql_used=cql_used,
             errors=errors,
         )
 
@@ -520,6 +582,7 @@ class BriefingOrchestrator:
         errors: list[str],
         log: structlog.stdlib.BoundLogger,
         confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
+        force_refresh: bool = False,
     ) -> list[BriefingSection]:
         all_keys: list[str] = []
         summaries: dict[str, str] = {}
@@ -584,6 +647,7 @@ class BriefingOrchestrator:
                     all_keys,
                     summaries or None,
                     confluence_refs or None,
+                    force_refresh,
                 )
             except AnalysisError as exc:
                 errors.append(f"issue analysis failed: {exc}")
@@ -645,6 +709,7 @@ async def _fetch_and_extract(
     confluence: "ConfluenceClientProtocol",
     extractor: "ContextExtractor",
     sem: asyncio.Semaphore,
+    force_refresh: bool = False,
 ) -> tuple[list[str], dict[str, ConfluenceReference]]:
     """Item 4: fetch page sections + run LLM extraction; returns values (no closure mutation).
 
@@ -652,8 +717,8 @@ async def _fetch_and_extract(
     post-gather eliminates the non-atomic read-check-write race on confluence_refs.
     """
     async with sem:
-        sections = await confluence.get_page_sections(page.page_id, _TARGET_HEADINGS)
-        extraction = await extractor.extract(page, sections)
+        sections = await confluence.get_page_sections(page.page_id, _TARGET_HEADINGS, force_refresh)
+        extraction = await extractor.extract(page, sections, force_refresh)
 
     page_refs: dict[str, ConfluenceReference] = {
         key: ConfluenceReference(

@@ -64,6 +64,7 @@ class ContextExtractor:
         self,
         page: ConfluencePage,
         sections: dict[str, str],
+        force_refresh: bool = False,
     ) -> ContextExtractionOutput:
         """Run LLM extraction on page sections; returns cached result on cache hit.
 
@@ -71,6 +72,7 @@ class ContextExtractor:
             page: Page metadata (page_id and last_modified are the cache key).
             sections: Plain-text sections extracted by html_extractor, e.g.
                       {'At Risk': '...', 'Mitigation': '...'}.
+            force_refresh: Skip cache read; always writes back after extracting.
 
         Returns:
             ContextExtractionOutput with jira_keys_mentioned, mitigation_owners,
@@ -79,14 +81,14 @@ class ContextExtractor:
         cache_key = (page.page_id, page.last_modified)
 
         # Fast path - no lock needed for read.
-        if cache_key in self._cache:
+        if not force_refresh and cache_key in self._cache:
             logger.debug("context_extractor_cache_hit", page_id=page.page_id)
             return self._cache[cache_key]
 
         # Per-(page_id, last_modified) lock - prevents concurrent duplicate LLM calls.
         async with self._extract_locks[cache_key]:
             # Re-check after acquiring - another coroutine may have extracted while waiting.
-            if cache_key in self._cache:
+            if not force_refresh and cache_key in self._cache:
                 logger.debug(
                     "context_extractor_cache_hit_post_lock", page_id=page.page_id
                 )

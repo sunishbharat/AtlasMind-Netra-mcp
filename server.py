@@ -338,6 +338,7 @@ def create_server(
         template_id: str | None = None,
         projects: list[str] | None = None,
         clarification_answer: str | None = None,
+        force_refresh: bool = False,
         ctx: Context | None = None,
     ) -> BriefingResponse:
         """Meeting agenda -> topic decomposition -> per-topic clarification -> multi-query
@@ -352,6 +353,11 @@ def create_server(
         call this tool again with their answer as `clarification_answer`.
 
         template_id is reserved for future briefing templates and has no effect yet.
+
+        Set force_refresh=True when the user says "recheck", "try again", "refresh that",
+        "I got wrong data", "the data seems off", or otherwise questions the accuracy of a
+        previous result. When the response contains a non-empty errors list, surface those
+        errors to the user verbatim and offer to retry with force_refresh=True.
         """
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
@@ -366,6 +372,7 @@ def create_server(
             projects=projects,
             clarification_answer=clarification_answer,
             elicit=elicit,
+            force_refresh=force_refresh,
         )
 
     @mcp.tool
@@ -396,6 +403,8 @@ def create_server(
         spaces: list[str] | None = None,
         recency_days: int | None = 30,
         limit: int = 5,
+        force_refresh: bool = False,
+        page_urls: list[str] | None = None,
     ) -> ConfluenceContextResponse:
         """Search Confluence for pages relevant to a release version, risk topic, or keyword.
 
@@ -407,13 +416,29 @@ def create_server(
         configured - you do not need to call it manually before generate_briefing.
 
         Returns empty result (no error) if Confluence is not configured.
+
+        Set force_refresh=True when the user says "re-search", "refresh that",
+        "try again", "the results seem stale", "these pages are outdated", or otherwise
+        questions whether the Confluence results are accurate or current.
+        When the response contains a non-empty errors list, surface those errors to the
+        user and offer to retry with force_refresh=True.
+
+        page_urls: Specific Confluence page URLs to include alongside the keyword search.
+          Supports Cloud (.../pages/{id}/...) and Server viewpage (?pageId={id}) formats.
+          Unrecognized URL formats are reported in the errors list and skipped gracefully.
+          Pinned pages consume from the limit budget first. If len(page_urls) >= limit,
+          no CQL keyword-search results are included in the response.
         """
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             request_id=str(uuid.uuid4()),
             session_id=session_id,
         )
-        return await briefing_orch.search_context(query, spaces, recency_days, limit)
+        return await briefing_orch.search_context(
+            query, spaces, recency_days, limit,
+            force_refresh=force_refresh,
+            page_urls=page_urls,
+        )
 
     @mcp.tool
     async def get_jira_context(

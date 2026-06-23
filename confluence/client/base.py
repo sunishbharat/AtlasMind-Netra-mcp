@@ -31,8 +31,24 @@ class ConfluenceClientProtocol(Protocol):
         self,
         page_id: str,
         target_headings: list[str],
+        force_refresh: bool = False,
     ) -> dict[str, str]:
         """Fetch page HTML and return extracted plain-text sections by heading."""
+        ...
+
+    async def fetch_page_metadata(
+        self,
+        page_id: str,
+        source_url: str,
+        force_refresh: bool = False,
+    ) -> ConfluencePage:
+        """Fetch page metadata + body in one API call; populates body cache.
+
+        Args:
+            page_id: Numeric Confluence page ID.
+            source_url: Original URL provided by the caller; stored in ConfluencePage.url.
+            force_refresh: Skip TTLCache read; still writes back after fetching.
+        """
         ...
 
     async def find_pages_mentioning_keys(

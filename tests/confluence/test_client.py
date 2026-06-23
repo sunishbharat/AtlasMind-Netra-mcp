@@ -161,7 +161,7 @@ class TestGetPageSections:
             fetch_count += 1
             return f"<h2>At Risk</h2><p>CAR-{page_id} blocked.</p>"
 
-        client._fetch_page_text = fake_fetch  # type: ignore[method-assign]
+        client._fetch_page_html = fake_fetch  # type: ignore[method-assign]
 
         results = await asyncio.gather(
             client.get_page_sections("page1", ["At Risk"]),
@@ -183,11 +183,90 @@ class TestGetPageSections:
             fetch_count += 1
             return ""
 
-        client._fetch_page_text = fake_fetch  # type: ignore[method-assign]
+        client._fetch_page_html = fake_fetch  # type: ignore[method-assign]
 
         result = await client.get_page_sections("page1", ["At Risk"])
         assert fetch_count == 0
         assert "At Risk" in result
+
+    @pytest.mark.asyncio
+    async def test_force_refresh_bypasses_cache_read_but_writes_back(self) -> None:
+        """force_refresh=True must bypass both fast-path and post-lock re-check reads,
+        but always write back so subsequent non-refresh calls serve fresh data.
+
+        Step sequence:
+        1. Pre-populate cache with stale data A.
+        2. force_refresh=True -> fetch_count==1, cache holds fresh data B.
+        3. force_refresh=True again -> fetch_count==2 (post-lock guard also bypassed).
+        4. No force_refresh -> fetch_count still 2 (write-back is warm).
+        """
+        client = _make_client()
+        client._page_cache["page1"] = "<h2>At Risk</h2><p>stale</p>"
+
+        fetch_count = 0
+
+        async def fake_fetch(page_id: str) -> str:
+            nonlocal fetch_count
+            fetch_count += 1
+            return f"<h2>At Risk</h2><p>fresh-{fetch_count}</p>"
+
+        client._fetch_page_html = fake_fetch  # type: ignore[method-assign]
+
+        # Step 2: force_refresh bypasses stale cache.
+        result = await client.get_page_sections("page1", ["At Risk"], force_refresh=True)
+        assert fetch_count == 1
+        assert "fresh-1" in result.get("At Risk", "")
+        assert "fresh-1" in client._page_cache.get("page1", "")
+
+        # Step 3: second force_refresh bypasses the freshly-written cache too.
+        result2 = await client.get_page_sections("page1", ["At Risk"], force_refresh=True)
+        assert fetch_count == 2
+        assert "fresh-2" in result2.get("At Risk", "")
+
+        # Step 4: no force_refresh -> serves from cache, no new fetch.
+        result3 = await client.get_page_sections("page1", ["At Risk"], force_refresh=False)
+        assert fetch_count == 2
+        assert "fresh-2" in result3.get("At Risk", "")
+
+    @pytest.mark.asyncio
+    async def test_fetch_page_metadata_populates_body_cache(self) -> None:
+        """fetch_page_metadata issues one API call with expand=body.view,space,version,
+        populates _page_cache so a subsequent get_page_sections is a cache hit,
+        and returns a ConfluencePage with all metadata fields set from the response.
+        """
+        client = _make_client()
+        fetch_count = 0
+
+        def fake_get_page_by_id(page_id: str, expand: str) -> dict[str, Any]:
+            nonlocal fetch_count
+            fetch_count += 1
+            assert "body.view" in expand
+            assert "space" in expand
+            assert "version" in expand
+            return {
+                "id": page_id,
+                "title": "My Page",
+                "space": {"key": "PROJ"},
+                "version": {"when": "2026-06-20T10:00:00.000Z"},
+                "body": {"view": {"value": "<h2>At Risk</h2><p>CAR-101 blocked</p>"}},
+            }
+
+        client._confluence.get_page_by_id.side_effect = fake_get_page_by_id  # type: ignore[attr-defined]
+
+        source_url = "https://confluence.example.com/pages/123456/My-Page"
+        page = await client.fetch_page_metadata("123456", source_url)
+
+        assert fetch_count == 1
+        assert page.page_id == "123456"
+        assert page.title == "My Page"
+        assert page.space_key == "PROJ"
+        assert page.last_modified == "2026-06-20T10:00:00.000Z"
+        assert page.url == source_url
+        # Body must be cached so a subsequent get_page_sections is a cache hit.
+        assert "123456" in client._page_cache
+        sections = await client.get_page_sections("123456", ["At Risk"])
+        assert fetch_count == 1  # no new API call - served from cache
+        assert "At Risk" in sections
 
     @pytest.mark.asyncio
     async def test_ttl_cache_expires(self) -> None:
@@ -202,7 +281,7 @@ class TestGetPageSections:
             fetch_count += 1
             return "<h2>At Risk</h2><p>refreshed</p>"
 
-        client._fetch_page_text = fake_fetch  # type: ignore[method-assign]
+        client._fetch_page_html = fake_fetch  # type: ignore[method-assign]
 
         with freeze_time("2026-06-20 10:00:10"):  # 10s later - TTL expired
             # TTLCache does not auto-expire in-process without a tick, so simulate

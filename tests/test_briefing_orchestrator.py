@@ -110,6 +110,7 @@ class FakeAnalyser:
         issue_keys: list[str],
         summaries: dict[str, str] | None = None,
         confluence_refs: dict[str, list[ConfluenceReference]] | None = None,
+        force_refresh: bool = False,
     ) -> list[BlockerAnalysis]:
         return self._analyses
 

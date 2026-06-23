@@ -56,6 +56,7 @@ class FakeBriefingOrchestrator:
         projects: list[str] | None = None,
         clarification_answer: str | None = None,
         elicit: Any = None,
+        force_refresh: bool = False,
     ) -> BriefingResponse:
         self.generate_calls.append(
             {"agenda_text": agenda_text, "session_id": session_id, "projects": projects}
@@ -72,6 +73,9 @@ class FakeBriefingOrchestrator:
         spaces: list[str] | None = None,
         recency_days: int | None = None,
         limit: int = 5,
+        *,
+        force_refresh: bool = False,
+        page_urls: list[str] | None = None,
     ) -> ConfluenceContextResponse:
         return ConfluenceContextResponse()
 

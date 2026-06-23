@@ -240,6 +240,65 @@ async def test_analyse_cache_hit_skips_second_llm_call(monkeypatch: pytest.Monke
     assert call_count["n"] == 1  # second call hits cache
 
 
+async def test_force_refresh_bypasses_cache_read_but_writes_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force_refresh=True must bypass the FIFO cache read but always write back.
+
+    Step sequence:
+    1. Pre-populate cache with stale entry.
+    2. force_refresh=True -> _analyse_one called (count==1), cache updated.
+    3. force_refresh=True again -> _analyse_one called again (count==2).
+    4. No force_refresh -> _analyse_one not called (count stays 2, serves cache).
+    """
+    call_count = {"n": 0}
+    model = TestModel(custom_output_args=_GOOD_SUGGESTIONS)
+    analyser = _make_analyser(model)
+
+    original = analyser._analyse_one
+
+    async def counting_analyse_one(
+        issue: IssueDetail, summaries: dict[str, str] | None, refs: list[ConfluenceReference]
+    ) -> object:
+        call_count["n"] += 1
+        return await original(issue, summaries, refs)
+
+    monkeypatch.setattr(analyser, "_analyse_one", counting_analyse_one)
+
+    detail = _issue(changelog=[_changelog_entry("Blocked", 3)])
+    cache_ts = detail.changelog[-1].timestamp
+    cache_key = ("CAR-101", cache_ts)
+
+    # Step 1: pre-populate cache with a stale entry.
+    from models.responses import BlockerAnalysis
+    stale = BlockerAnalysis(
+        issue_key="CAR-101",
+        summary="stale",
+        blocked_reason="stale",
+        days_blocked=0,
+        owner="stale",
+        suggested_resolution="stale",
+        mitigation="stale",
+        risk_note="stale",
+    )
+    analyser._cache[cache_key] = stale
+
+    detail_response = _response(detail)
+
+    # Step 2: force_refresh bypasses stale cache.
+    results = await analyser.analyse(detail_response, ["CAR-101"], force_refresh=True)
+    assert call_count["n"] == 1
+    assert results[0].summary != "stale"
+
+    # Step 3: second force_refresh also bypasses (freshly written) cache.
+    await analyser.analyse(detail_response, ["CAR-101"], force_refresh=True)
+    assert call_count["n"] == 2
+
+    # Step 4: no force_refresh -> served from cache, no new LLM call.
+    await analyser.analyse(detail_response, ["CAR-101"], force_refresh=False)
+    assert call_count["n"] == 2
+
+
 async def test_analyse_unassigned_owner() -> None:
     model = TestModel(custom_output_args=_GOOD_SUGGESTIONS)
     analyser = _make_analyser(model)

@@ -128,6 +128,69 @@ class TestContextExtractorConcurrency:
         assert call_count == 2  # two different pages - both must run
 
 
+class TestContextExtractorForceRefresh:
+    @pytest.mark.asyncio
+    async def test_force_refresh_bypasses_cache_read_but_writes_back(self) -> None:
+        """force_refresh=True must bypass both fast-path and post-lock re-check reads,
+        but always write back so subsequent non-refresh calls serve fresh data.
+
+        Step sequence:
+        1. Pre-populate cache with stale output A.
+        2. force_refresh=True -> call_count==1, cache holds fresh output B.
+        3. force_refresh=True again -> call_count==2 (post-lock guard also bypassed).
+        4. No force_refresh -> call_count still 2 (write-back is warm).
+        """
+        call_count = 0
+
+        stale_output = ContextExtractionOutput(
+            jira_keys_mentioned=["OLD-1"],
+            mitigation_owners=[],
+            severity_signals=[],
+            action_items=[],
+        )
+
+        def make_fresh_output(n: int) -> ContextExtractionOutput:
+            return ContextExtractionOutput(
+                jira_keys_mentioned=[f"NEW-{n}"],
+                mitigation_owners=[],
+                severity_signals=[],
+                action_items=[],
+            )
+
+        async def run_mock(prompt: str) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            result.output = make_fresh_output(call_count)
+            return result
+
+        agent = MagicMock(spec=Agent)
+        agent.run = run_mock
+        extractor = ContextExtractor(agent=agent)
+
+        page = _sample_page()
+        cache_key = (page.page_id, page.last_modified)
+        extractor._cache[cache_key] = stale_output  # pre-populate with stale
+
+        sections = {"At Risk": "content"}
+
+        # Step 2: force_refresh bypasses stale cache.
+        result = await extractor.extract(page, sections, force_refresh=True)
+        assert call_count == 1
+        assert result.jira_keys_mentioned == ["NEW-1"]
+        assert extractor._cache[cache_key].jira_keys_mentioned == ["NEW-1"]
+
+        # Step 3: second force_refresh bypasses the freshly-written cache too.
+        result2 = await extractor.extract(page, sections, force_refresh=True)
+        assert call_count == 2
+        assert result2.jira_keys_mentioned == ["NEW-2"]
+
+        # Step 4: no force_refresh -> serves from cache, no new LLM call.
+        result3 = await extractor.extract(page, sections, force_refresh=False)
+        assert call_count == 2
+        assert result3.jira_keys_mentioned == ["NEW-2"]
+
+
 class TestContextExtractorOutput:
     @pytest.mark.asyncio
     async def test_returns_extraction_output(self) -> None:

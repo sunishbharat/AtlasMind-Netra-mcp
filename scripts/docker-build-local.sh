@@ -5,6 +5,7 @@ set -e
 REGISTRY="${REGISTRY:-ghcr.io/sunishbharat}"
 VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo dev)}"
 docker buildx build \
+    --no-cache \
     --platform "linux/$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" \
     --tag "${REGISTRY}/atlasmind-netra-mcp:${VERSION}" \
     --file docker/Dockerfile \

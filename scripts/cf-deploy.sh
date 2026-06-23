@@ -13,6 +13,7 @@ IMAGE="${REGISTRY}/atlasmind-netra-mcp:${GIT_SHA}"
 
 echo "==> Building linux/amd64 + linux/arm64: ${IMAGE}"
 docker buildx build \
+    --no-cache \
     --platform linux/amd64,linux/arm64 \
     --tag "${IMAGE}" \
     --tag "${REGISTRY}/atlasmind-netra-mcp:latest" \

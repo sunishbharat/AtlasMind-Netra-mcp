@@ -6,17 +6,44 @@ environment variable with the ``NETRA_`` prefix and ``__`` as nested delimiter, 
 ``.env.example`` for the complete list.
 """
 
+import json
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 INSTANCE_DEFAULT_PROJECT = "_default"
 """Conventions-store project key used when no Jira project scope is known (fallback level)."""
 
 LITE_ERROR_PREFIX = "Error: "
 """In-band error marker in the backend's answer field (docs/atlasmind_lite_api_contract.md)."""
+
+
+def _parse_csv_or_json_list(v: object) -> object:
+    """Coerce a list field that may arrive as CSV string, JSON-array string, or list.
+
+    Pydantic-settings v2 treats ``list[...]`` as a complex annotation and tries to
+    ``json.loads`` env values before any ``field_validator`` runs. For CSV-style
+    inputs (the documented format in ``.env.example`` and ``manifest.yml.template``)
+    that decode fails. Pair this helper with ``Annotated[list[str], NoDecode]`` on the
+    field so the raw string reaches the validator instead.
+    """
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [p for part in v.split(",") if (p := part.strip().strip('"').strip("'"))]
+    if isinstance(v, list):
+        return [str(item).strip() for item in v if str(item).strip()]
+    return v
 
 
 class LLMSettings(BaseModel):
@@ -181,11 +208,18 @@ class AnalysisSettings(BaseModel):
             "Override with NETRA_ANALYSIS__MAX_CONCURRENCY."
         ),
     )
-    blocked_statuses: list[str] = Field(
+    blocked_statuses: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["Blocked", "Stalled", "On Hold", "Waiting"],
         description="Status names that count as blocked for days_blocked computation "
-        "(case-insensitive). Override to match your Jira workflow.",
+        "(case-insensitive). Override to match your Jira workflow. "
+        "NETRA_ANALYSIS__BLOCKED_STATUSES accepts a comma-separated string "
+        "(Blocked,Stalled) or JSON array ([\"Blocked\",\"Stalled\"]).",
     )
+
+    @field_validator("blocked_statuses", mode="before")
+    @classmethod
+    def _parse_blocked_statuses(cls, v: object) -> object:
+        return _parse_csv_or_json_list(v)
     ranking_rule_path: Path = Field(
         default=Path("config/ranking_default.json"),
         description="Path to the ranking weights JSON file.",
@@ -336,7 +370,7 @@ class ConfluenceSettings(BaseModel):
             "NETRA_CONFLUENCE__EMAIL."
         ),
     )
-    default_spaces: list[str] = Field(
+    default_spaces: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description=(
             "Default Confluence space keys to search. NETRA_CONFLUENCE__DEFAULT_SPACES. "
@@ -347,9 +381,7 @@ class ConfluenceSettings(BaseModel):
     @field_validator("default_spaces", mode="before")
     @classmethod
     def _parse_spaces(cls, v: object) -> object:
-        if isinstance(v, str) and v and not v.startswith("["):
-            return [s.strip() for s in v.split(",") if s.strip()]
-        return v
+        return _parse_csv_or_json_list(v)
     search_limit: int = Field(
         default=10,
         description="Max pages per CQL variant search. NETRA_CONFLUENCE__SEARCH_LIMIT.",
